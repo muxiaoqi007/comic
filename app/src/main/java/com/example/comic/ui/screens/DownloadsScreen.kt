@@ -329,6 +329,7 @@ private fun DownloadRow(
                 val details = buildList {
                     record.pageCount?.takeIf { it > 0 }?.let { add("$it 页") }
                     formatSize(record.sizeBytes)?.let { add(it) }
+                    if (record.contentUri != null) add("Download/Comic")
                     add(DATE_FORMAT.format(Date(record.downloadedAt)))
                 }.joinToString(" · ")
                 Text(
@@ -337,12 +338,14 @@ private fun DownloadRow(
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
-            IconButton(onClick = onExport) {
-                Icon(
-                    imageVector = Icons.Outlined.SaveAlt,
-                    contentDescription = "导出到手机",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+            if (record.contentUri == null) {
+                IconButton(onClick = onExport) {
+                    Icon(
+                        imageVector = Icons.Outlined.SaveAlt,
+                        contentDescription = "导出到手机",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
             IconButton(onClick = onDelete) {
                 Icon(

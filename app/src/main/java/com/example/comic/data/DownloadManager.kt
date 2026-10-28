@@ -1,5 +1,10 @@
 package com.example.comic.data
 
+import android.content.ContentValues
+import android.net.Uri
+import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import com.example.comic.model.Book
 import com.example.comic.model.DownloadRecord
 import com.example.comic.model.storageKey
@@ -21,6 +26,7 @@ import java.util.concurrent.ConcurrentHashMap
 class DownloadManager(
     private val repository: SourceRepository,
     private val store: DownloadStore,
+    private val appContext: android.content.Context,
 ) {
     data class ActiveDownload(
         val key: String,
@@ -83,15 +89,26 @@ class DownloadManager(
                         ))
                     }
                 }
-                if (!temp.renameTo(epub)) {
-                    temp.copyTo(epub, overwrite = true)
+                val publicUri = runCatching {
+                    moveToPublicDownloads(temp, exportFileName(book.title))
+                }.getOrNull()
+
+                val storedPath: String
+                if (publicUri != null) {
                     temp.delete()
+                    storedPath = ""
+                } else {
+                    if (!temp.renameTo(epub)) {
+                        temp.copyTo(epub, overwrite = true)
+                        temp.delete()
+                    }
+                    storedPath = epub.absolutePath
                 }
                 partial = null
 
                 val coverFile = store.coverFile(book.sourceId, book.id)
                 val hasCover = runCatching {
-                    source.downloadCover(book.seriesId, coverFile)
+                    source.downloadCover(book, coverFile)
                 }.getOrDefault(false)
 
                 store.add(
@@ -105,7 +122,8 @@ class DownloadManager(
                         author = author,
                         pageCount = result.pageCount.takeIf { it > 0 },
                         sizeBytes = result.sizeBytes,
-                        filePath = epub.absolutePath,
+                        filePath = storedPath,
+                        contentUri = publicUri,
                         coverPath = coverFile
                             .takeIf { hasCover && it.length() > 0 }
                             ?.absolutePath,
@@ -128,6 +146,36 @@ class DownloadManager(
             }
         }
     }
+
+    private fun moveToPublicDownloads(sourceFile: File, fileName: String): String? {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
+        val resolver = appContext.contentResolver
+        val values = ContentValues().apply {
+            put(MediaStore.Downloads.DISPLAY_NAME, fileName)
+            put(MediaStore.Downloads.MIME_TYPE, "application/epub+zip")
+            put(
+                MediaStore.Downloads.RELATIVE_PATH,
+                "${Environment.DIRECTORY_DOWNLOADS}/Comic",
+            )
+            put(MediaStore.Downloads.IS_PENDING, 1)
+        }
+        val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
+            ?: return null
+        return try {
+            resolver.openOutputStream(uri)?.use { output ->
+                sourceFile.inputStream().use { input -> input.copyTo(output) }
+            } ?: error("无法写入 Download/Comic")
+            val done = ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }
+            resolver.update(uri, done, null, null)
+            uri.toString()
+        } catch (e: Exception) {
+            runCatching { resolver.delete(uri, null, null) }
+            throw e
+        }
+    }
+
+    private fun exportFileName(title: String): String =
+        title.replace(Regex("[\\\\/:*?\"<>|]"), "_").ifBlank { "comic" }.take(80) + ".epub"
 
     fun cancel(key: String) {
         jobs[key]?.cancel()

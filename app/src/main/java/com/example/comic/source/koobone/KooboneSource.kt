@@ -1,6 +1,7 @@
 package com.example.comic.source.koobone
 
 import android.content.Context
+import android.net.Uri
 import com.example.comic.data.DownloadStore
 import com.example.comic.model.Book
 import com.example.comic.model.Library
@@ -35,6 +36,7 @@ import okhttp3.Request
 import org.apache.commons.compress.archivers.zip.ZipFile
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.io.FileInputStream
 import java.io.InputStream
 import java.net.URLDecoder
 import java.util.Collections
@@ -111,8 +113,8 @@ class KooboneSource(
 
     override suspend fun pages(book: Book): List<Page> = withContext(Dispatchers.IO) {
         val volume = volumeFor(book.id)
-        val file = epubFile(volume)
-        epubPages(file).mapIndexed { index, entry ->
+        val entries = withEpubZip(volume) { zip -> pagesFromZip(zip) }
+        entries.mapIndexed { index, entry ->
             Page(
                 sourceId = id,
                 bookId = book.id,
@@ -125,13 +127,29 @@ class KooboneSource(
 
     override suspend fun openPage(page: Page): InputStream = withContext(Dispatchers.IO) {
         val volume = volumeFor(page.bookId)
-        val file = epubFile(volume)
-        val bytes = ZipFile(file).use { zip ->
+        val bytes = withEpubZip(volume) { zip ->
             val entry = zip.getEntry(page.key)
                 ?: throw SourceException("EPUB 中找不到页面：${page.key}")
             zip.getInputStream(entry).use { it.readBytes() }
         }
         ByteArrayInputStream(bytes)
+    }
+
+    private fun <T> withEpubZip(volume: KooboneVolume, block: (ZipFile) -> T): T {
+        val record = downloadStore.find(id, volume.fileMd5)
+        val contentUri = record?.contentUri
+        if (contentUri != null) {
+            val descriptor = context.contentResolver.openFileDescriptor(
+                Uri.parse(contentUri),
+                "r",
+            ) ?: throw SourceException("无法打开已下载的 EPUB")
+            descriptor.use { pfd ->
+                FileInputStream(pfd.fileDescriptor).use { input ->
+                    ZipFile(input.channel).use { zip -> return block(zip) }
+                }
+            }
+        }
+        return ZipFile(epubFile(volume)).use { zip -> block(zip) }
     }
 
     override suspend fun openCover(series: Series): InputStream? = withContext(Dispatchers.IO) {
@@ -215,9 +233,9 @@ class KooboneSource(
         DownloadResult(sizeBytes = size, pageCount = pageCount)
     }
 
-    override suspend fun downloadCover(seriesId: String, targetFile: File): Boolean =
+    override suspend fun downloadCover(book: Book, targetFile: File): Boolean =
         withContext(Dispatchers.IO) {
-            val volume = volumeFor(seriesId)
+            val volume = volumeFor(book.id)
             val raw = volume.coverUrl.takeIf { it.isNotBlank() } ?: volume.coverSmall
             if (raw.isBlank()) return@withContext false
             val request = Request.Builder()
@@ -440,14 +458,22 @@ class KooboneSource(
         }
     }
 
-    private fun epubPages(file: File): List<String> {
-        val all = try {
-            ZipFile(file).use { zip -> readSpinePages(zip) }
+    private fun epubPages(file: File): List<String> = try {
+        ZipFile(file).use { zip -> pagesFromZip(zip) }
+    } catch (e: SourceException) {
+        throw e
+    } catch (e: Exception) {
+        throw SourceException("无法解析 EPUB：${e.message}", e)
+    }
+
+    private fun pagesFromZip(zip: ZipFile): List<String> {
+        val pages = try {
+            readSpinePages(zip)
         } catch (e: Exception) {
             throw SourceException("无法解析 EPUB：${e.message}", e)
         }
-        if (all.isEmpty()) throw SourceException("EPUB 中没有可显示的图片")
-        return all
+        if (pages.isEmpty()) throw SourceException("EPUB 中没有可显示的图片")
+        return pages
     }
 
     private fun readSpinePages(zip: ZipFile): List<String> {

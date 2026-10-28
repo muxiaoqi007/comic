@@ -1,6 +1,7 @@
 package com.example.comic.data
 
 import android.content.Context
+import android.net.Uri
 import com.example.comic.model.DownloadRecord
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -11,6 +12,7 @@ import kotlinx.serialization.json.Json
 import java.io.File
 
 class DownloadStore(context: Context) {
+    private val appContext = context.applicationContext
     private val root = File(
         context.getExternalFilesDir(null) ?: context.filesDir,
         "comic_downloads",
@@ -23,7 +25,9 @@ class DownloadStore(context: Context) {
 
     init {
         synchronized(lock) {
-            val valid = _items.value.filter { File(it.filePath).length() > 0 }
+            val valid = _items.value.filter {
+                it.contentUri != null || File(it.filePath).length() > 0
+            }
             if (valid.size != _items.value.size) {
                 _items.value = valid
                 persist(valid)
@@ -57,7 +61,13 @@ class DownloadStore(context: Context) {
             }
             _items.value = updated
             persist(updated)
-            runCatching { File(record.filePath).delete() }
+            if (record.contentUri != null) {
+                runCatching {
+                    appContext.contentResolver.delete(Uri.parse(record.contentUri), null, null)
+                }
+            } else {
+                runCatching { File(record.filePath).delete() }
+            }
             record.coverPath?.let { runCatching { File(it).delete() } }
         }
     }

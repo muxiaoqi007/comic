@@ -14,6 +14,7 @@ data class DownloadRecord(
     val pageCount: Int? = null,
     val sizeBytes: Long = 0,
     val filePath: String,
+    val contentUri: String? = null,
     val coverPath: String? = null,
     val downloadedAt: Long,
 )

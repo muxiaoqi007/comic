@@ -15,5 +15,5 @@ interface DownloadableSource : ComicSource {
         onProgress: (downloadedBytes: Long, totalBytes: Long) -> Unit,
     ): DownloadResult
 
-    suspend fun downloadCover(seriesId: String, targetFile: File): Boolean
+    suspend fun downloadCover(book: Book, targetFile: File): Boolean
 }

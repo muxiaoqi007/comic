@@ -27,5 +27,5 @@ class AppContainer(context: Context) {
         downloadStore = downloadStore,
     )
     val imageLoader: ImageLoader = ImageLoader(repository)
-    val downloadManager: DownloadManager = DownloadManager(repository, downloadStore)
+    val downloadManager: DownloadManager = DownloadManager(repository, downloadStore, this.context)
 }

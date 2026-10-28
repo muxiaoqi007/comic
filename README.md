@@ -20,9 +20,9 @@ A native Android comic reader built with Kotlin and Jetpack Compose.
   - Page slider and tap zones
   - Reading progress saved locally; Komga progress synced to the server
 - **Downloads**
-  - Koobone EPUBs saved locally for offline reading
-  - Per-book download progress, retry, cancel, delete
-  - Export downloaded EPUB to a user-selected folder through the system file picker
+  - Koobone EPUBs are saved directly to the system `Download/Comic` folder on Android 10+, so they are visible to file managers and system search
+  - Per-book download progress, retry, cancel, delete; deleting also removes the public file
+  - Older/private downloads can be exported to a user-selected folder through the system file picker
 
 ## Build
 
@@ -50,7 +50,7 @@ keyPassword=...
 
 ## Version
 
-Current version: **0.3.5** (versionCode 8). The version is also shown on the Sources screen.
+Current version: **0.3.6** (versionCode 9). The version is also shown on the Sources screen.
 
 ## Notes
 
