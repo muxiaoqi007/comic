@@ -27,8 +27,10 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.Cloud
+import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Dns
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.FolderOpen
 import androidx.compose.material.icons.outlined.MenuBook
 import androidx.compose.material.icons.outlined.Refresh
@@ -91,6 +93,7 @@ fun SourcesScreen() {
     val scope = rememberCoroutineScope()
 
     var showAdd by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf<SourceConfig?>(null) }
     var pendingDelete by remember { mutableStateOf<SourceConfig?>(null) }
     var testingId by remember { mutableStateOf<String?>(null) }
 
@@ -154,6 +157,7 @@ fun SourcesScreen() {
                         source = source,
                         testing = testingId == source.id,
                         onTest = { test(source) },
+                        onEdit = { editing = source },
                         onDelete = { pendingDelete = source },
                     )
                 }
@@ -161,13 +165,23 @@ fun SourcesScreen() {
         }
     }
 
-    if (showAdd) {
+    if (showAdd || editing != null) {
+        val wasEditing = editing != null
         AddSourceDialog(
-            onDismiss = { showAdd = false },
+            initial = editing,
+            onDismiss = {
+                showAdd = false
+                editing = null
+            },
             onSave = { config ->
                 repository.saveSource(config)
                 showAdd = false
-                scope.launch { snackbar.showSnackbar("已添加：${config.name}") }
+                editing = null
+                scope.launch {
+                    snackbar.showSnackbar(
+                        if (wasEditing) "已更新：${config.name}" else "已添加：${config.name}",
+                    )
+                }
             },
         )
     }
@@ -197,6 +211,7 @@ private fun SourceCard(
     source: SourceConfig,
     testing: Boolean,
     onTest: () -> Unit,
+    onEdit: () -> Unit,
     onDelete: () -> Unit,
 ) {
     Card(
@@ -235,6 +250,13 @@ private fun SourceCard(
                     }
                 }
                 Spacer(Modifier.weight(1f))
+                IconButton(onClick = onEdit) {
+                    Icon(
+                        Icons.Outlined.Edit,
+                        contentDescription = "编辑",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
                 IconButton(onClick = onDelete) {
                     Icon(Icons.Outlined.Delete, contentDescription = "删除", tint = MaterialTheme.colorScheme.error)
                 }
@@ -258,19 +280,29 @@ private fun SourceConfig.locationLabel(): String = when (type) {
 
 @Composable
 private fun AddSourceDialog(
+    initial: SourceConfig? = null,
     onDismiss: () -> Unit,
     onSave: (SourceConfig) -> Unit,
 ) {
     val context = LocalContext.current
-    var type by remember { mutableStateOf<SourceType?>(null) }
-    var name by remember { mutableStateOf("") }
-    var treeUri by remember { mutableStateOf<String?>(null) }
-    var treeLabel by remember { mutableStateOf<String?>(null) }
-    var baseUrl by remember { mutableStateOf("") }
-    var rootPath by remember { mutableStateOf("") }
-    var username by remember { mutableStateOf("") }
-    var password by remember { mutableStateOf("") }
-    var apiKey by remember { mutableStateOf("") }
+    val isEditing = initial != null
+    var type by remember { mutableStateOf(initial?.type) }
+    var name by remember { mutableStateOf(initial?.name.orEmpty()) }
+    var treeUri by remember { mutableStateOf(initial?.treeUri) }
+    var treeLabel by remember {
+        mutableStateOf(
+            initial?.treeUri?.let { uri ->
+                runCatching {
+                    DocumentFile.fromTreeUri(context, Uri.parse(uri))?.name
+                }.getOrNull() ?: Uri.parse(uri).lastPathSegment
+            },
+        )
+    }
+    var baseUrl by remember { mutableStateOf(initial?.baseUrl.orEmpty()) }
+    var rootPath by remember { mutableStateOf(initial?.rootPath.orEmpty()) }
+    var username by remember { mutableStateOf(initial?.username.orEmpty()) }
+    var password by remember { mutableStateOf(initial?.password.orEmpty()) }
+    var apiKey by remember { mutableStateOf(initial?.apiKey.orEmpty()) }
 
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
@@ -352,15 +384,27 @@ private fun AddSourceDialog(
                     }
                 } else {
                     Row(verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = { type = null }) {
-                            Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "返回")
+                        IconButton(onClick = { if (isEditing) onDismiss() else type = null }) {
+                            Icon(
+                                imageVector = if (isEditing) {
+                                    Icons.Outlined.Close
+                                } else {
+                                    Icons.AutoMirrored.Outlined.ArrowBack
+                                },
+                                contentDescription = if (isEditing) "关闭" else "返回",
+                            )
                         }
                         Text(
-                            text = when (currentType) {
-                                SourceType.LOCAL -> "添加本地文件夹"
-                                SourceType.WEBDAV -> "添加 WebDAV"
-                                SourceType.KOMGA -> "添加 Komga"
-                                SourceType.KOOBONE -> "添加 Koobone"
+                            text = buildString {
+                                if (isEditing) append("编辑 ") else append("添加 ")
+                                append(
+                                    when (currentType) {
+                                        SourceType.LOCAL -> "本地文件夹"
+                                        SourceType.WEBDAV -> "WebDAV"
+                                        SourceType.KOMGA -> "Komga"
+                                        SourceType.KOOBONE -> "Koobone"
+                                    },
+                                )
                             },
                             style = MaterialTheme.typography.titleLarge,
                         )
@@ -511,7 +555,7 @@ private fun AddSourceDialog(
                             onClick = {
                                 onSave(
                                     SourceConfig(
-                                        id = UUID.randomUUID().toString(),
+                                        id = initial?.id ?: UUID.randomUUID().toString(),
                                         type = currentType,
                                         name = name.trim(),
                                         treeUri = treeUri,

@@ -5,6 +5,7 @@ A native Android comic reader built with Kotlin and Jetpack Compose.
 ## Features
 
 - **Sources**
+  - Edit existing sources without losing reading progress or downloads
   - Local folders via Storage Access Framework (CBZ/ZIP archives and image folders)
   - WebDAV (remote CBZ reading over HTTP range requests)
   - Komga (supports both the legacy GET API and the current `POST /series/list`, `POST /books/list` API)
@@ -49,7 +50,7 @@ keyPassword=...
 
 ## Version
 
-Current version: **0.3.4** (versionCode 7). The version is also shown on the Sources screen.
+Current version: **0.3.5** (versionCode 8). The version is also shown on the Sources screen.
 
 ## Notes
 
