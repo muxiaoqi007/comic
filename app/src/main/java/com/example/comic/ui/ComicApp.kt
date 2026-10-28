@@ -7,8 +7,10 @@ import androidx.compose.material.icons.outlined.CollectionsBookmark
 import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
+import androidx.compose.material3.NavigationBarItemDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -17,6 +19,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavGraph.Companion.findStartDestination
 import androidx.navigation.NavType
@@ -64,9 +67,17 @@ fun ComicApp(container: AppContainer) {
             contentWindowInsets = WindowInsets(0, 0, 0, 0),
             bottomBar = {
                 if (showBottomBar) {
-                    NavigationBar {
+                    NavigationBar(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        tonalElevation = 0.dp,
+                    ) {
                         destinations.forEach { destination ->
                             NavigationBarItem(
+                                colors = NavigationBarItemDefaults.colors(
+                                    selectedIconColor = MaterialTheme.colorScheme.primary,
+                                    selectedTextColor = MaterialTheme.colorScheme.primary,
+                                    indicatorColor = MaterialTheme.colorScheme.secondaryContainer,
+                                ),
                                 selected = currentRoute == destination.route,
                                 onClick = {
                                     navController.navigate(destination.route) {
@@ -102,7 +113,9 @@ fun ComicApp(container: AppContainer) {
                     LibraryScreen(
                         viewModel = viewModel,
                         onOpenSeries = { navController.navigate(Routes.series(it)) },
-                        onOpenBook = { navController.navigate(Routes.reader(it)) },
+                        onOpenBook = { book, page ->
+                            navController.navigate(Routes.reader(book, page))
+                        },
                         onOpenSources = { navController.navigate(Routes.SOURCES) },
                     )
                 }
@@ -160,7 +173,9 @@ fun ComicApp(container: AppContainer) {
                         series = series,
                         viewModel = viewModel,
                         onBack = { navController.popBackStack() },
-                        onOpenBook = { navController.navigate(Routes.reader(it)) },
+                        onOpenBook = { book, page ->
+                            navController.navigate(Routes.reader(book, page))
+                        },
                     )
                 }
 
@@ -171,12 +186,17 @@ fun ComicApp(container: AppContainer) {
                         navArgument("bookId") { type = NavType.StringType },
                         navArgument("seriesId") { type = NavType.StringType },
                         navArgument("title") { type = NavType.StringType },
+                        navArgument("page") {
+                            type = NavType.IntType
+                            defaultValue = -1
+                        },
                     ),
                 ) { entry ->
                     val sourceId = entry.arguments?.getString("sourceId").orEmpty()
                     val bookId = entry.arguments?.getString("bookId").orEmpty()
                     val seriesId = entry.arguments?.getString("seriesId").orEmpty()
                     val title = entry.arguments?.getString("title").orEmpty()
+                    val page = entry.arguments?.getInt("page") ?: -1
                     val viewModel: ReaderViewModel = viewModel {
                         ReaderViewModel(
                             repository = container.repository,
@@ -185,6 +205,7 @@ fun ComicApp(container: AppContainer) {
                             bookId = bookId,
                             seriesId = seriesId,
                             bookTitle = title,
+                            initialPageOverride = page.takeIf { it >= 0 },
                         )
                     }
                     ReaderScreen(

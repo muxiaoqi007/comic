@@ -26,6 +26,7 @@ import androidx.compose.runtime.produceState
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
@@ -98,15 +99,23 @@ fun SourceTypeBadge(type: SourceType, modifier: Modifier = Modifier) {
 }
 
 @Composable
-fun LoadingState(modifier: Modifier = Modifier, label: String = "加载中…") {
+fun LoadingState(
+    modifier: Modifier = Modifier,
+    label: String = "加载中…",
+    color: Color? = null,
+) {
     Column(
         modifier = modifier.fillMaxSize(),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        CircularProgressIndicator()
+        CircularProgressIndicator(color = color ?: MaterialTheme.colorScheme.primary)
         Spacer(Modifier.height(16.dp))
-        Text(label, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(
+            label,
+            style = MaterialTheme.typography.bodyMedium,
+            color = color ?: MaterialTheme.colorScheme.onSurfaceVariant,
+        )
     }
 }
 
@@ -149,6 +158,7 @@ fun EmptyState(
 fun ErrorState(
     message: String,
     modifier: Modifier = Modifier,
+    color: Color? = null,
     onRetry: (() -> Unit)? = null,
 ) {
     Column(
@@ -156,7 +166,12 @@ fun ErrorState(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Text(message, style = MaterialTheme.typography.bodyMedium, textAlign = TextAlign.Center)
+        Text(
+            message,
+            style = MaterialTheme.typography.bodyMedium,
+            color = color ?: MaterialTheme.colorScheme.onSurface,
+            textAlign = TextAlign.Center,
+        )
         if (onRetry != null) {
             Spacer(Modifier.height(16.dp))
             Button(onClick = onRetry) { Text("重试") }

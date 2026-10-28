@@ -4,8 +4,10 @@ import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -20,6 +22,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -60,6 +63,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation as ComposePassword
@@ -89,6 +94,7 @@ fun SourcesScreen() {
     }
     val repository = container.repository
     val sources by repository.sources.collectAsState()
+    val downloads by container.downloadManager.downloads.collectAsState()
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
@@ -96,6 +102,7 @@ fun SourcesScreen() {
     var editing by remember { mutableStateOf<SourceConfig?>(null) }
     var pendingDelete by remember { mutableStateOf<SourceConfig?>(null) }
     var testingId by remember { mutableStateOf<String?>(null) }
+    var testResults by remember { mutableStateOf<Map<String, SourceTestResult>>(emptyMap()) }
 
     fun test(config: SourceConfig) {
         if (testingId != null) return
@@ -103,6 +110,13 @@ fun SourcesScreen() {
         scope.launch {
             val result = runCatching { repository.testConnection(config) }
             testingId = null
+            testResults = testResults + (config.id to SourceTestResult(
+                ok = result.isSuccess,
+                message = result.fold(
+                    onSuccess = { "成功 · 刚刚" },
+                    onFailure = { (it.message ?: "连接失败").take(80) },
+                ),
+            ))
             snackbar.showSnackbar(
                 result.fold(
                     onSuccess = { "${config.name}：连接成功" },
@@ -130,6 +144,8 @@ fun SourcesScreen() {
         floatingActionButton = {
             ExtendedFloatingActionButton(
                 onClick = { showAdd = true },
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.onPrimary,
                 icon = { Icon(Icons.Outlined.Add, contentDescription = null) },
                 text = { Text("添加源") },
             )
@@ -156,6 +172,7 @@ fun SourcesScreen() {
                     SourceCard(
                         source = source,
                         testing = testingId == source.id,
+                        testResult = testResults[source.id],
                         onTest = { test(source) },
                         onEdit = { editing = source },
                         onDelete = { pendingDelete = source },
@@ -183,6 +200,7 @@ fun SourcesScreen() {
                     )
                 }
             },
+            onTest = { config -> repository.testConnectionTransient(config) },
         )
     }
 
@@ -190,7 +208,17 @@ fun SourcesScreen() {
         AlertDialog(
             onDismissRequest = { pendingDelete = null },
             title = { Text("删除漫画源") },
-            text = { Text("确定删除「${source.name}」吗？阅读进度会保留在本地。") },
+            text = {
+                val affected = downloads.count { it.sourceId == source.id }
+                Text(
+                    buildString {
+                        append("确定删除「${source.name}」吗？阅读进度会保留在本地。")
+                        if (affected > 0) {
+                            append("\n该源有 $affected 本已下载漫画，删除后将无法从“下载”页打开。")
+                        }
+                    },
+                )
+            },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -210,6 +238,7 @@ fun SourcesScreen() {
 private fun SourceCard(
     source: SourceConfig,
     testing: Boolean,
+    testResult: SourceTestResult?,
     onTest: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
@@ -236,7 +265,30 @@ private fun SourceCard(
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
             )
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(5.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(6.dp)
+                        .clip(CircleShape)
+                        .background(
+                            when {
+                                testResult == null -> MaterialTheme.colorScheme.outline
+                                testResult.ok -> Color(0xFF3F8F62)
+                                else -> MaterialTheme.colorScheme.error
+                            },
+                        ),
+                )
+                Spacer(Modifier.width(6.dp))
+                Text(
+                    text = testResult?.let { "上次测试：${it.message}" } ?: "尚未测试",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Spacer(Modifier.height(6.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 TextButton(onClick = onTest, enabled = !testing) {
                     if (testing) {
@@ -265,6 +317,8 @@ private fun SourceCard(
     }
 }
 
+private data class SourceTestResult(val ok: Boolean, val message: String)
+
 private fun SourceConfig.locationLabel(): String = when (type) {
     SourceType.LOCAL -> treeUri
         ?.let { runCatching { Uri.parse(it).lastPathSegment }.getOrNull() }
@@ -283,6 +337,7 @@ private fun AddSourceDialog(
     initial: SourceConfig? = null,
     onDismiss: () -> Unit,
     onSave: (SourceConfig) -> Unit,
+    onTest: suspend (SourceConfig) -> Unit,
 ) {
     val context = LocalContext.current
     val isEditing = initial != null
@@ -303,6 +358,28 @@ private fun AddSourceDialog(
     var username by remember { mutableStateOf(initial?.username.orEmpty()) }
     var password by remember { mutableStateOf(initial?.password.orEmpty()) }
     var apiKey by remember { mutableStateOf(initial?.apiKey.orEmpty()) }
+    val scope = rememberCoroutineScope()
+    var testing by remember { mutableStateOf(false) }
+    var inlineResult by remember { mutableStateOf<SourceTestResult?>(null) }
+
+    fun currentConfig(): SourceConfig? {
+        val currentType = type ?: return null
+        return SourceConfig(
+            id = initial?.id ?: UUID.randomUUID().toString(),
+            type = currentType,
+            name = name.trim(),
+            treeUri = treeUri,
+            baseUrl = if (currentType == SourceType.KOOBONE) {
+                baseUrl.trim().ifBlank { "https://koobone.com" }
+            } else {
+                baseUrl.trim().ifBlank { null }
+            },
+            rootPath = rootPath.trim(),
+            username = username.trim().ifBlank { null },
+            password = password.ifBlank { null },
+            apiKey = apiKey.trim().ifBlank { null },
+        )
+    }
 
     val folderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) {
@@ -543,7 +620,50 @@ private fun AddSourceDialog(
                         }
                     }
 
-                    Spacer(Modifier.height(20.dp))
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        TextButton(
+                            enabled = !testing,
+                            onClick = {
+                                val config = currentConfig() ?: return@TextButton
+                                testing = true
+                                inlineResult = null
+                                scope.launch {
+                                    val result = runCatching { onTest(config) }
+                                    testing = false
+                                    inlineResult = SourceTestResult(
+                                        ok = result.isSuccess,
+                                        message = result.fold(
+                                            onSuccess = { "连接成功 · 刚刚" },
+                                            onFailure = { (it.message ?: "连接失败").take(100) },
+                                        ),
+                                    )
+                                }
+                            },
+                        ) {
+                            if (testing) {
+                                CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+                                Spacer(Modifier.width(6.dp))
+                                Text("测试中…")
+                            } else {
+                                Text("测试连接")
+                            }
+                        }
+                        Spacer(Modifier.weight(1f))
+                        inlineResult?.let {
+                            Text(
+                                text = it.message,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (it.ok) Color(0xFF3F8F62) else MaterialTheme.colorScheme.error,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1.4f),
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(8.dp))
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.End,
@@ -552,25 +672,7 @@ private fun AddSourceDialog(
                         Spacer(Modifier.width(8.dp))
                         TextButton(
                             enabled = isValid(currentType, name, treeUri, baseUrl, username, password),
-                            onClick = {
-                                onSave(
-                                    SourceConfig(
-                                        id = initial?.id ?: UUID.randomUUID().toString(),
-                                        type = currentType,
-                                        name = name.trim(),
-                                        treeUri = treeUri,
-                                        baseUrl = if (currentType == SourceType.KOOBONE) {
-                                            baseUrl.trim().ifBlank { "https://koobone.com" }
-                                        } else {
-                                            baseUrl.trim().ifBlank { null }
-                                        },
-                                        rootPath = rootPath.trim(),
-                                        username = username.trim().ifBlank { null },
-                                        password = password.ifBlank { null },
-                                        apiKey = apiKey.trim().ifBlank { null },
-                                    ),
-                                )
-                            },
+                            onClick = { currentConfig()?.let(onSave) },
                         ) { Text("保存") }
                     }
                 }

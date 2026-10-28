@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
+import androidx.compose.material.icons.automirrored.outlined.ArrowForward
 import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.DownloadDone
@@ -30,6 +31,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -60,7 +62,7 @@ fun SeriesDetailScreen(
     series: Series,
     viewModel: SeriesDetailViewModel,
     onBack: () -> Unit,
-    onOpenBook: (Book) -> Unit,
+    onOpenBook: (Book, Int?) -> Unit,
 ) {
     val state by viewModel.state.collectAsState()
     val container = LocalContainer.current
@@ -71,6 +73,20 @@ fun SeriesDetailScreen(
     val downloadable = remember(series.sourceId) {
         container.repository.supportsDownload(series.sourceId)
     }
+    val readCount = remember(state.books, progressMap) {
+        state.books.count { progressMap[it.storageKey]?.completed == true }
+    }
+    val currentBook = remember(state.books, progressMap) {
+        val inProgress = state.books
+            .mapNotNull { book -> progressMap[book.storageKey]?.let { book to it } }
+            .filterNot { it.second.completed }
+            .maxByOrNull { it.second.updatedAt }
+            ?.first
+        inProgress
+            ?: state.books.firstOrNull { progressMap[it.storageKey] == null }
+            ?: state.books.firstOrNull()
+    }
+    val allFinished = state.books.isNotEmpty() && readCount == state.books.size
 
     Scaffold(
         topBar = {
@@ -111,7 +127,20 @@ fun SeriesDetailScreen(
                     SeriesHeader(
                         series = series,
                         bookCount = state.books.size,
+                        readCount = readCount,
                     )
+                }
+                currentBook?.let { book ->
+                    item {
+                        SeriesContinueCard(
+                            book = book,
+                            progress = progressMap[book.storageKey],
+                            allFinished = allFinished,
+                            onOpen = {
+                                onOpenBook(book, if (allFinished) 0 else null)
+                            },
+                        )
+                    }
                 }
                 itemsIndexed(
                     items = state.books,
@@ -131,7 +160,8 @@ fun SeriesDetailScreen(
                         onDownload = {
                             downloadManager.download(book, series.title, series.description)
                         },
-                        onClick = { onOpenBook(book) },
+                        onRestart = { onOpenBook(book, 0) },
+                        onClick = { onOpenBook(book, null) },
                     )
                 }
             }
@@ -140,7 +170,54 @@ fun SeriesDetailScreen(
 }
 
 @Composable
-private fun SeriesHeader(series: Series, bookCount: Int) {
+private fun SeriesContinueCard(
+    book: Book,
+    progress: ReadingProgress?,
+    allFinished: Boolean,
+    onOpen: () -> Unit,
+) {
+    val label = when {
+        allFinished -> "已全部读完 · 从头重读"
+        progress == null -> "开始阅读 · ${book.title}"
+        else -> "继续阅读 · ${book.title}"
+    }
+    val meta = when {
+        allFinished -> "共 ${progress?.totalPages ?: 0} 页"
+        progress == null -> "还没有阅读记录"
+        else -> "读到 ${progress.page + 1} / ${progress.totalPages} 页"
+    }
+    Surface(
+        color = MaterialTheme.colorScheme.onSurface,
+        contentColor = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(14.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 4.dp)
+            .clickable(onClick = onOpen),
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(label, style = MaterialTheme.typography.labelLarge)
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    text = meta,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.surface.copy(alpha = 0.68f),
+                )
+            }
+            Icon(
+                imageVector = Icons.AutoMirrored.Outlined.ArrowForward,
+                contentDescription = null,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SeriesHeader(series: Series, bookCount: Int, readCount: Int) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -159,7 +236,7 @@ private fun SeriesHeader(series: Series, bookCount: Int) {
             Text(series.title, style = MaterialTheme.typography.titleLarge)
             Spacer(Modifier.height(6.dp))
             Text(
-                text = "$bookCount 本",
+                text = if (readCount > 0) "$bookCount 卷 · 已读 $readCount 卷" else "$bookCount 卷",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -187,6 +264,7 @@ private fun BookRow(
     downloaded: Boolean,
     activeDownload: DownloadManager.ActiveDownload?,
     onDownload: () -> Unit,
+    onRestart: () -> Unit,
     onClick: () -> Unit,
 ) {
     Row(
@@ -257,6 +335,11 @@ private fun BookRow(
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            }
+        }
+        if (progress?.completed == true) {
+            TextButton(onClick = onRestart) {
+                Text("重读", style = MaterialTheme.typography.labelSmall)
             }
         }
         when {

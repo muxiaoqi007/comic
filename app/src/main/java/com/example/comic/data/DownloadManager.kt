@@ -37,6 +37,8 @@ class DownloadManager(
         val downloadedBytes: Long = 0,
         val totalBytes: Long = 0,
         val error: String? = null,
+        val book: Book? = null,
+        val author: String? = null,
     )
 
     val downloads: StateFlow<List<DownloadRecord>> = store.items
@@ -65,6 +67,8 @@ class DownloadManager(
                 bookId = book.id,
                 title = book.title,
                 seriesTitle = seriesTitle,
+                book = book,
+                author = author,
             ))
         }
 
@@ -176,6 +180,11 @@ class DownloadManager(
 
     private fun exportFileName(title: String): String =
         title.replace(Regex("[\\\\/:*?\"<>|]"), "_").ifBlank { "comic" }.take(80) + ".epub"
+
+    fun retry(item: ActiveDownload) {
+        val book = item.book ?: return
+        download(book, item.seriesTitle, item.author)
+    }
 
     fun cancel(key: String) {
         jobs[key]?.cancel()

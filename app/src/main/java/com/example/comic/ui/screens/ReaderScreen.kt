@@ -27,6 +27,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
@@ -35,6 +36,7 @@ import androidx.compose.material.icons.outlined.BrokenImage
 import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.SwapHoriz
 import androidx.compose.material.icons.outlined.SwapVert
+import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
@@ -44,6 +46,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -67,6 +70,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -100,6 +104,7 @@ fun ReaderScreen(
             state.loading -> LoadingState(
                 label = "加载页面…",
                 modifier = Modifier.background(Color.Black),
+                color = Color.White,
             )
 
             state.error != null -> Column(Modifier.fillMaxSize()) {
@@ -110,6 +115,7 @@ fun ReaderScreen(
                 )
                 ErrorState(
                     message = state.error ?: "加载失败",
+                    color = Color.White,
                     onRetry = { viewModel.load() },
                 )
             }
@@ -120,7 +126,7 @@ fun ReaderScreen(
                     pageLabel = "",
                     onBack = onBack,
                 )
-                ErrorState(message = "这本漫画没有可显示的页面")
+                ErrorState(message = "这本漫画没有可显示的页面", color = Color.White)
             }
 
             else -> ReaderContent(
@@ -149,6 +155,7 @@ private fun ReaderContent(
     val scope = rememberCoroutineScope()
     var chromeVisible by remember { mutableStateOf(true) }
     var previousMode by remember { mutableStateOf(mode) }
+    var completionDismissed by remember { mutableStateOf(false) }
     val currentMode by rememberUpdatedState(mode)
 
     val layoutInfo = listState.layoutInfo
@@ -170,6 +177,9 @@ private fun ReaderContent(
         verticalPage
     } else {
         pagerState.currentPage.coerceIn(0, pages.lastIndex)
+    }
+    LaunchedEffect(currentPage) {
+        if (currentPage < pages.lastIndex) completionDismissed = false
     }
     var exiting by remember { mutableStateOf(false) }
 
@@ -227,8 +237,12 @@ private fun ReaderContent(
                 .fillMaxSize()
                 .pointerInput(mode) {
                     detectTapGestures { offset ->
+                        if (!chromeVisible) {
+                            chromeVisible = true
+                            return@detectTapGestures
+                        }
                         if (mode == ReadingMode.VERTICAL) {
-                            chromeVisible = !chromeVisible
+                            chromeVisible = false
                         } else {
                             val width = size.width.toFloat()
                             when {
@@ -250,7 +264,7 @@ private fun ReaderContent(
                                     if (target in pages.indices) goTo(target)
                                 }
 
-                                else -> chromeVisible = !chromeVisible
+                                else -> chromeVisible = false
                             }
                         }
                     }
@@ -314,6 +328,69 @@ private fun ReaderContent(
                 total = pages.size,
                 onSeek = { goTo(it) },
             )
+        }
+        AnimatedVisibility(
+            visible = chromeVisible &&
+                currentPage == pages.lastIndex &&
+                !completionDismissed,
+            enter = fadeIn() + slideInVertically { it },
+            exit = fadeOut() + slideOutVertically { it },
+            modifier = Modifier
+                .align(Alignment.BottomCenter)
+                .padding(horizontal = 12.dp, vertical = 104.dp),
+        ) {
+            ReaderCompletionCard(
+                total = pages.size,
+                onRestart = { goTo(0) },
+                onBack = { finish() },
+                onDismiss = { completionDismissed = true },
+            )
+        }
+
+    }
+}
+
+@Composable
+private fun ReaderCompletionCard(
+    total: Int,
+    onRestart: () -> Unit,
+    onBack: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        shape = RoundedCornerShape(18.dp),
+        shadowElevation = 12.dp,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(16.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        text = "本卷已读完",
+                        style = MaterialTheme.typography.titleMedium,
+                        fontFamily = FontFamily.Serif,
+                    )
+                    Text(
+                        text = "共 $total 页 · 进度已保存",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                TextButton(onClick = onDismiss) { Text("关闭") }
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Button(
+                    onClick = onRestart,
+                    modifier = Modifier.weight(1f),
+                ) { Text("从头重读") }
+                Button(
+                    onClick = onBack,
+                    modifier = Modifier.weight(1f),
+                ) { Text("回系列") }
+            }
         }
     }
 }
@@ -414,24 +491,35 @@ private fun ReaderBottomBar(
     total: Int,
     onSeek: (Int) -> Unit,
 ) {
+    var sliderValue by remember(page) { mutableStateOf(page.toFloat()) }
+    var dragging by remember { mutableStateOf(false) }
+    val shownPage = if (dragging) sliderValue.roundToInt() else page
+
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Color.Black.copy(alpha = 0.62f))
+            .background(Color.Black.copy(alpha = 0.86f))
             .navigationBarsPadding()
             .padding(horizontal = 20.dp, vertical = 10.dp)
             .pointerInput(Unit) { detectTapGestures { } },
     ) {
         Text(
-            text = "${page + 1} / $total",
+            text = "${shownPage + 1} / $total",
             color = Color.White,
             style = MaterialTheme.typography.labelMedium,
             modifier = Modifier.fillMaxWidth(),
             textAlign = TextAlign.Center,
         )
         Slider(
-            value = page.toFloat(),
-            onValueChange = { value -> onSeek(value.roundToInt()) },
+            value = sliderValue,
+            onValueChange = { value ->
+                dragging = true
+                sliderValue = value
+            },
+            onValueChangeFinished = {
+                dragging = false
+                onSeek(sliderValue.roundToInt())
+            },
             valueRange = 0f..(total - 1).toFloat().coerceAtLeast(1f),
             colors = SliderDefaults.colors(
                 thumbColor = Color.White,

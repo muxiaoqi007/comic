@@ -134,6 +134,7 @@ fun DownloadsScreen(onOpen: (DownloadRecord) -> Unit) {
                     items(activeItems, key = { "active-${it.key}" }) { item ->
                         ActiveDownloadRow(
                             item = item,
+                            onRetry = { manager.retry(item) },
                             onCancel = { manager.cancel(item.key) },
                         )
                     }
@@ -160,7 +161,15 @@ fun DownloadsScreen(onOpen: (DownloadRecord) -> Unit) {
         AlertDialog(
             onDismissRequest = { pendingDelete = null },
             title = { Text("删除下载") },
-            text = { Text("确定删除「${record.title}」的本地文件吗？阅读进度会保留。") },
+            text = {
+                Text(
+                    if (record.contentUri != null) {
+                        "确定删除「${record.title}」吗？会同时删除 Download/Comic 中的 EPUB 文件，且不可恢复。阅读进度会保留。"
+                    } else {
+                        "确定删除「${record.title}」的本地文件吗？阅读进度会保留。"
+                    },
+                )
+            },
             confirmButton = {
                 TextButton(
                     onClick = {
@@ -189,6 +198,7 @@ private fun SectionTitle(text: String) {
 @Composable
 private fun ActiveDownloadRow(
     item: DownloadManager.ActiveDownload,
+    onRetry: () -> Unit,
     onCancel: () -> Unit,
 ) {
     Surface(
@@ -231,12 +241,19 @@ private fun ActiveDownloadRow(
                 }
             }
             if (item.error != null) {
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text = item.error,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
+                Spacer(Modifier.height(4.dp))
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = item.error,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (item.book != null) {
+                        TextButton(onClick = onRetry) { Text("重试") }
+                    }
+                    TextButton(onClick = onCancel) { Text("移除") }
+                }
             } else {
                 Spacer(Modifier.height(10.dp))
                 if (item.totalBytes > 0) {

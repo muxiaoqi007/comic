@@ -22,6 +22,7 @@ class ReaderViewModel(
     bookId: String,
     seriesId: String,
     bookTitle: String,
+    initialPageOverride: Int? = null,
 ) : ViewModel() {
 
     val book = Book(
@@ -40,7 +41,8 @@ class ReaderViewModel(
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
 
-    val initialPage: Int = (repository.progressFor(book)?.page ?: 0).coerceAtLeast(0)
+    val initialPage: Int = (initialPageOverride ?: repository.progressFor(book)?.page ?: 0)
+        .coerceAtLeast(0)
 
     private var saveJob: Job? = null
 

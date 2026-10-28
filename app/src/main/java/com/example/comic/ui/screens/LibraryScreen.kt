@@ -31,6 +31,7 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
@@ -76,11 +77,9 @@ private enum class ShelfFilter(val label: String) {
     ALL("全部"),
     READING("在读"),
     UNREAD("未读"),
-    FINISHED("已读完"),
+    FINISHED("系列读完"),
 }
 
-private val PaperTop = Color(0xFFF7F1E5)
-private val PaperBottom = Color(0xFFEDE1CD)
 private val ShelfLight = Color(0xFFC79A6A)
 private val ShelfMid = Color(0xFF9C6B40)
 private val ShelfDark = Color(0xFF66401F)
@@ -90,7 +89,7 @@ private val ShelfDark = Color(0xFF66401F)
 fun LibraryScreen(
     viewModel: LibraryViewModel,
     onOpenSeries: (Series) -> Unit,
-    onOpenBook: (Book) -> Unit,
+    onOpenBook: (Book, Int?) -> Unit,
     onOpenSources: () -> Unit,
 ) {
     val state by viewModel.state.collectAsState()
@@ -128,7 +127,7 @@ fun LibraryScreen(
         val started = progresses.map { it.bookId }.distinct().size
         val expected = entry.series.bookCount
         val allCompleted = progresses.all { it.completed }
-        val allVolumesRead = expected == null || started >= expected
+        val allVolumesRead = expected != null && started >= expected
         return if (allCompleted && allVolumesRead) {
             ShelfFilter.FINISHED
         } else {
@@ -159,7 +158,14 @@ fun LibraryScreen(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Brush.verticalGradient(listOf(PaperTop, PaperBottom))),
+            .background(
+                Brush.verticalGradient(
+                    listOf(
+                        MaterialTheme.colorScheme.background,
+                        MaterialTheme.colorScheme.surfaceVariant,
+                    ),
+                ),
+            ),
     ) {
         Scaffold(
             containerColor = Color.Transparent,
@@ -224,15 +230,12 @@ fun LibraryScreen(
                             entry = entry,
                             progress = progress,
                             onOpen = {
-                                onOpenBook(
-                                    Book(
-                                        id = progress.bookId,
-                                        sourceId = progress.sourceId,
-                                        seriesId = progress.seriesId ?: entry.series.id,
-                                        title = progress.bookTitle ?: entry.series.title,
-                                    ),
-                                )
+                                onOpenBook(heroBook(entry, progress), null)
                             },
+                            onRestart = {
+                                onOpenBook(heroBook(entry, progress), 0)
+                            },
+                            onOpenSeries = { onOpenSeries(entry.series) },
                         )
                     }
                     ShelfFilters(
@@ -271,11 +274,21 @@ fun LibraryScreen(
     }
 }
 
+private fun heroBook(entry: LibraryViewModel.Entry, progress: ReadingProgress): Book =
+    Book(
+        id = progress.bookId,
+        sourceId = progress.sourceId,
+        seriesId = progress.seriesId ?: entry.series.id,
+        title = progress.bookTitle ?: entry.series.title,
+    )
+
 @Composable
 private fun ContinueReadingCard(
     entry: LibraryViewModel.Entry,
     progress: ReadingProgress,
     onOpen: () -> Unit,
+    onRestart: () -> Unit,
+    onOpenSeries: () -> Unit,
 ) {
     Box(
         modifier = Modifier
@@ -303,7 +316,7 @@ private fun ContinueReadingCard(
             Column(Modifier.weight(1f)) {
                 Text(
                     text = if (progress.completed) {
-                        "已读完 · ${entry.series.title}"
+                        "本卷已读完 · ${entry.series.title}"
                     } else {
                         "继续阅读 · ${entry.series.title}"
                     },
@@ -338,19 +351,44 @@ private fun ContinueReadingCard(
                 Spacer(Modifier.height(6.dp))
                 Text(
                     text = if (progress.completed) {
-                        "已读完 · 共 ${progress.totalPages} 页"
+                        "本卷已读完 · 共 ${progress.totalPages} 页"
                     } else {
                         "读到 ${progress.page + 1} / ${progress.totalPages} 页"
                     },
                     style = MaterialTheme.typography.labelSmall,
                     color = Color.White.copy(alpha = 0.72f),
                 )
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = Color.White,
+                        contentColor = Color(0xFF4A301A),
+                        modifier = Modifier.clickable(
+                            onClick = if (progress.completed) onRestart else onOpen,
+                        ),
+                    ) {
+                        Text(
+                            text = if (progress.completed) "从头重读" else "继续阅读",
+                            style = MaterialTheme.typography.labelSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        )
+                    }
+                    Surface(
+                        shape = RoundedCornerShape(50),
+                        color = Color.White.copy(alpha = 0.14f),
+                        contentColor = Color.White,
+                        modifier = Modifier.clickable(onClick = onOpenSeries),
+                    ) {
+                        Text(
+                            text = "查看系列",
+                            style = MaterialTheme.typography.labelSmall,
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                        )
+                    }
+                }
             }
-            Icon(
-                imageVector = Icons.AutoMirrored.Outlined.ArrowForward,
-                contentDescription = null,
-                tint = Color.White.copy(alpha = 0.8f),
-            )
         }
     }
 }
@@ -372,6 +410,12 @@ private fun ShelfFilters(
             FilterChip(
                 selected = filter == item,
                 onClick = { onSelect(item) },
+                colors = FilterChipDefaults.filterChipColors(
+                    containerColor = Color.Transparent,
+                    labelColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                    selectedContainerColor = MaterialTheme.colorScheme.onSurface,
+                    selectedLabelColor = MaterialTheme.colorScheme.surface,
+                ),
                 label = {
                     Text("${item.label} ${counts[item] ?: 0}")
                 },
@@ -500,37 +544,6 @@ private fun ShelfBook(
                 .align(Alignment.CenterEnd)
                 .background(Color.White.copy(alpha = 0.55f)),
         )
-        Surface(
-            shape = CircleShape,
-            color = Color.Black.copy(alpha = 0.48f),
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(6.dp),
-        ) {
-            Text(
-                text = sourceLabel(entry.sourceType),
-                style = MaterialTheme.typography.labelSmall,
-                color = Color.White,
-                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-            )
-        }
-        val count = entry.series.bookCount
-        if (count != null && count > 1) {
-            Surface(
-                shape = CircleShape,
-                color = Color.Black.copy(alpha = 0.55f),
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(6.dp),
-            ) {
-                Text(
-                    text = "$count 册",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color.White,
-                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
-                )
-            }
-        }
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -550,19 +563,24 @@ private fun ShelfBook(
                 overflow = TextOverflow.Ellipsis,
             )
             val count = entry.series.bookCount
-            val readLabel = when {
-                count != null && count > 1 && readCount > 0 -> "已读 $readCount/$count 册"
-                progress?.completed == true -> "已读完"
-                else -> null
+            val meta = buildString {
+                append(sourceLabel(entry.sourceType))
+                append(" · ")
+                append(if (count != null) "$count 卷" else "单卷")
+                when {
+                    count != null && count > 1 && readCount > 0 ->
+                        append(" · 已读 $readCount/$count")
+                    progress?.completed == true -> append(" · 已读完")
+                }
             }
-            readLabel?.let {
-                Spacer(Modifier.height(2.dp))
-                Text(
-                    text = it,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color.White.copy(alpha = 0.78f),
-                )
-            }
+            Spacer(Modifier.height(2.dp))
+            Text(
+                text = meta,
+                style = MaterialTheme.typography.labelSmall,
+                color = Color.White.copy(alpha = 0.78f),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
             if (progress != null && progress.totalPages > 0) {
                 Spacer(Modifier.height(4.dp))
                 LinearProgressIndicator(

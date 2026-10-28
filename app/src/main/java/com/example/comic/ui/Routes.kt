@@ -12,7 +12,7 @@ object Routes {
     const val SERIES_PATTERN =
         "series?sourceId={sourceId}&seriesId={seriesId}&title={title}&libraryId={libraryId}&bookCount={bookCount}"
     const val READER_PATTERN =
-        "reader?sourceId={sourceId}&bookId={bookId}&seriesId={seriesId}&title={title}"
+        "reader?sourceId={sourceId}&bookId={bookId}&seriesId={seriesId}&title={title}&page={page}"
 
     fun series(series: Series): String =
         "series?sourceId=${Uri.encode(series.sourceId)}" +
@@ -21,9 +21,10 @@ object Routes {
             "&libraryId=${Uri.encode(series.libraryId)}" +
             "&bookCount=${series.bookCount ?: -1}"
 
-    fun reader(book: Book): String =
+    fun reader(book: Book, page: Int? = null): String =
         "reader?sourceId=${Uri.encode(book.sourceId)}" +
             "&bookId=${Uri.encode(book.id)}" +
             "&seriesId=${Uri.encode(book.seriesId)}" +
-            "&title=${Uri.encode(book.title)}"
+            "&title=${Uri.encode(book.title)}" +
+            (page?.let { "&page=$it" } ?: "")
 }

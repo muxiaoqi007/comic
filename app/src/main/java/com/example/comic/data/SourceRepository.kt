@@ -65,6 +65,15 @@ class SourceRepository(
         source(config).testConnection()
     }
 
+    suspend fun testConnectionTransient(config: SourceConfig) = withContext(Dispatchers.IO) {
+        val probe = config.copy(id = "probe-${System.nanoTime()}")
+        try {
+            source(probe).testConnection()
+        } finally {
+            invalidate(probe.id)
+        }
+    }
+
     suspend fun seriesForSource(config: SourceConfig): List<Series> = withContext(Dispatchers.IO) {
         val source = source(config)
         val libraries = source.libraries()
