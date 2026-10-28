@@ -52,7 +52,7 @@ keyPassword=...
 
 ## Version
 
-Current version: **0.3.9** (versionCode 12). The version is also shown on the Sources screen.
+Current version: **0.3.10** (versionCode 13). The version is also shown on the Sources screen.
 
 ## Notes
 

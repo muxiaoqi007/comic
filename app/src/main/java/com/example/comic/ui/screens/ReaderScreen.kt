@@ -53,6 +53,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -190,15 +191,23 @@ private fun ReaderContent(
         if (currentPage < pages.lastIndex) completionDismissed = false
     }
     var exiting by remember { mutableStateOf(false) }
+    val latestPage = remember { mutableIntStateOf(currentPage) }
+    latestPage.intValue = currentPage
 
     fun finish() {
         if (exiting) return
         exiting = true
-        viewModel.saveNowBlocking(currentPage, pages.size)
+        viewModel.saveNowBlocking(latestPage.intValue, pages.size)
         onBack()
     }
 
     BackHandler(onBack = ::finish)
+
+    DisposableEffect(Unit) {
+        onDispose {
+            if (!exiting) viewModel.saveNowBlocking(latestPage.intValue, pages.size)
+        }
+    }
 
     LaunchedEffect(mode) {
         if (previousMode != mode) {
@@ -354,7 +363,7 @@ private fun ReaderContent(
                     {
                         if (!exiting) {
                             exiting = true
-                            viewModel.saveNowBlocking(currentPage, pages.size)
+                            viewModel.saveNowBlocking(latestPage.intValue, pages.size)
                             onOpenNext(next)
                         }
                     }
