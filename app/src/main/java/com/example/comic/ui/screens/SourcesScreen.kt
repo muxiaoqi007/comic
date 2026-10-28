@@ -74,12 +74,16 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.documentfile.provider.DocumentFile
 import androidx.compose.ui.platform.LocalContext
+import com.example.comic.data.SourceTestRecord
 import com.example.comic.model.SourceConfig
 import com.example.comic.model.SourceType
 import com.example.comic.ui.LocalContainer
 import com.example.comic.ui.components.EmptyState
 import com.example.comic.ui.components.SourceTypeBadge
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.UUID
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -102,7 +106,7 @@ fun SourcesScreen() {
     var editing by remember { mutableStateOf<SourceConfig?>(null) }
     var pendingDelete by remember { mutableStateOf<SourceConfig?>(null) }
     var testingId by remember { mutableStateOf<String?>(null) }
-    var testResults by remember { mutableStateOf<Map<String, SourceTestResult>>(emptyMap()) }
+    val testResults by container.sourceTestStore.results.collectAsState()
 
     fun test(config: SourceConfig) {
         if (testingId != null) return
@@ -110,13 +114,11 @@ fun SourcesScreen() {
         scope.launch {
             val result = runCatching { repository.testConnection(config) }
             testingId = null
-            testResults = testResults + (config.id to SourceTestResult(
-                ok = result.isSuccess,
-                message = result.fold(
-                    onSuccess = { "成功 · 刚刚" },
-                    onFailure = { (it.message ?: "连接失败").take(80) },
-                ),
-            ))
+            val message = result.fold(
+                onSuccess = { "成功" },
+                onFailure = { (it.message ?: "连接失败").take(80) },
+            )
+            container.sourceTestStore.record(config.id, result.isSuccess, message)
             snackbar.showSnackbar(
                 result.fold(
                     onSuccess = { "${config.name}：连接成功" },
@@ -238,7 +240,7 @@ fun SourcesScreen() {
 private fun SourceCard(
     source: SourceConfig,
     testing: Boolean,
-    testResult: SourceTestResult?,
+    testResult: SourceTestRecord?,
     onTest: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
@@ -281,7 +283,9 @@ private fun SourceCard(
                 )
                 Spacer(Modifier.width(6.dp))
                 Text(
-                    text = testResult?.let { "上次测试：${it.message}" } ?: "尚未测试",
+                    text = testResult?.let {
+                        "上次测试：${it.message} · ${relativeTime(it.testedAt)}"
+                    } ?: "尚未测试",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -318,6 +322,17 @@ private fun SourceCard(
 }
 
 private data class SourceTestResult(val ok: Boolean, val message: String)
+
+private fun relativeTime(timestamp: Long): String {
+    val diff = (System.currentTimeMillis() - timestamp).coerceAtLeast(0)
+    return when {
+        diff < 60_000L -> "刚刚"
+        diff < 3_600_000L -> "${diff / 60_000L} 分钟前"
+        diff < 86_400_000L -> "${diff / 3_600_000L} 小时前"
+        diff < 7 * 86_400_000L -> "${diff / 86_400_000L} 天前"
+        else -> SimpleDateFormat("M月d日", Locale.getDefault()).format(Date(timestamp))
+    }
+}
 
 private fun SourceConfig.locationLabel(): String = when (type) {
     SourceType.LOCAL -> treeUri

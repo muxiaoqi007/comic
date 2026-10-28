@@ -211,6 +211,11 @@ fun ComicApp(container: AppContainer) {
                     ReaderScreen(
                         viewModel = viewModel,
                         onBack = { navController.popBackStack() },
+                        onOpenNext = { next ->
+                            navController.navigate(Routes.reader(next)) {
+                                popUpTo(Routes.READER_PATTERN) { inclusive = true }
+                            }
+                        },
                     )
                 }
             }

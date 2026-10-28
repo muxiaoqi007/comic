@@ -10,6 +10,7 @@ A native Android comic reader built with Kotlin and Jetpack Compose.
   - WebDAV (remote CBZ reading over HTTP range requests)
   - Komga (supports both the legacy GET API and the current `POST /series/list`, `POST /books/list` API)
   - Koobone (email login, volume grouping, on-demand EPUB reading)
+  - Connection test with the last result persisted across restarts
 - **Library**
   - Physical bookshelf layout with wooden planks and book shadows
   - Continue-reading card
@@ -18,6 +19,7 @@ A native Android comic reader built with Kotlin and Jetpack Compose.
 - **Reader**
   - Left-to-right, right-to-left, and vertical (top-to-bottom) modes
   - Page slider and tap zones
+  - Completion card with restart, next-volume jump, and return
   - Reading progress saved locally; Komga progress synced to the server
 - **Downloads**
   - Koobone EPUBs are saved directly to the system `Download/Comic` folder on Android 10+, so they are visible to file managers and system search
@@ -50,7 +52,7 @@ keyPassword=...
 
 ## Version
 
-Current version: **0.3.8** (versionCode 11). The version is also shown on the Sources screen.
+Current version: **0.3.9** (versionCode 12). The version is also shown on the Sources screen.
 
 ## Notes
 

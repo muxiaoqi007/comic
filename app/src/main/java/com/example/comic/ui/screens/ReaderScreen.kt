@@ -44,6 +44,7 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
@@ -77,6 +78,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import com.example.comic.data.ImageLoader
+import com.example.comic.model.Book
 import com.example.comic.model.Page
 import com.example.comic.model.ReadingMode
 import com.example.comic.ui.LocalContainer
@@ -90,8 +92,10 @@ import kotlin.math.roundToInt
 fun ReaderScreen(
     viewModel: ReaderViewModel,
     onBack: () -> Unit,
+    onOpenNext: (Book) -> Unit,
 ) {
     val state by viewModel.state.collectAsState()
+    val nextBook by viewModel.nextBook.collectAsState()
     val readingSettings = LocalContainer.current.readingSettings
     val mode by readingSettings.mode.collectAsState()
 
@@ -133,8 +137,10 @@ fun ReaderScreen(
                 viewModel = viewModel,
                 pages = state.pages,
                 mode = mode,
+                nextBook = nextBook,
                 onModeChange = readingSettings::setMode,
                 onBack = onBack,
+                onOpenNext = onOpenNext,
             )
         }
     }
@@ -145,8 +151,10 @@ private fun ReaderContent(
     viewModel: ReaderViewModel,
     pages: List<Page>,
     mode: ReadingMode,
+    nextBook: Book?,
     onModeChange: (ReadingMode) -> Unit,
     onBack: () -> Unit,
+    onOpenNext: (Book) -> Unit,
 ) {
     val imageLoader = viewModel.imageLoader
     val initialPage = viewModel.initialPage.coerceIn(0, pages.lastIndex)
@@ -341,6 +349,16 @@ private fun ReaderContent(
         ) {
             ReaderCompletionCard(
                 total = pages.size,
+                nextTitle = nextBook?.title,
+                onNext = nextBook?.let { next ->
+                    {
+                        if (!exiting) {
+                            exiting = true
+                            viewModel.saveNowBlocking(currentPage, pages.size)
+                            onOpenNext(next)
+                        }
+                    }
+                },
                 onRestart = { goTo(0) },
                 onBack = { finish() },
                 onDismiss = { completionDismissed = true },
@@ -353,6 +371,8 @@ private fun ReaderContent(
 @Composable
 private fun ReaderCompletionCard(
     total: Int,
+    nextTitle: String?,
+    onNext: (() -> Unit)?,
     onRestart: () -> Unit,
     onBack: () -> Unit,
     onDismiss: () -> Unit,
@@ -381,15 +401,43 @@ private fun ReaderCompletionCard(
                 TextButton(onClick = onDismiss) { Text("关闭") }
             }
             Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (onNext != null && !nextTitle.isNullOrBlank()) {
                 Button(
-                    onClick = onRestart,
-                    modifier = Modifier.weight(1f),
-                ) { Text("从头重读") }
-                Button(
-                    onClick = onBack,
-                    modifier = Modifier.weight(1f),
-                ) { Text("回系列") }
+                    onClick = onNext,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("下一卷")
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        text = nextTitle,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onPrimary.copy(alpha = 0.8f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(
+                        onClick = onRestart,
+                        modifier = Modifier.weight(1f),
+                    ) { Text("从头重读") }
+                    OutlinedButton(
+                        onClick = onBack,
+                        modifier = Modifier.weight(1f),
+                    ) { Text("返回") }
+                }
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = onRestart,
+                        modifier = Modifier.weight(1f),
+                    ) { Text("从头重读") }
+                    Button(
+                        onClick = onBack,
+                        modifier = Modifier.weight(1f),
+                    ) { Text("返回") }
+                }
             }
         }
     }

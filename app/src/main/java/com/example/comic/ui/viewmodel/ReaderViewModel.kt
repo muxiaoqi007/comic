@@ -41,6 +41,9 @@ class ReaderViewModel(
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
 
+    private val _nextBook = MutableStateFlow<Book?>(null)
+    val nextBook: StateFlow<Book?> = _nextBook.asStateFlow()
+
     val initialPage: Int = (initialPageOverride ?: repository.progressFor(book)?.page ?: 0)
         .coerceAtLeast(0)
 
@@ -48,6 +51,9 @@ class ReaderViewModel(
 
     init {
         viewModelScope.launch { repository.repairProgressSeries(book) }
+        viewModelScope.launch {
+            _nextBook.value = runCatching { repository.nextBook(book) }.getOrNull()
+        }
         load()
     }
 

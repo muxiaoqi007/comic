@@ -27,6 +27,7 @@ class SourceRepository(
     private val sourceStore: SourceStore,
     private val progressStore: ProgressStore,
     private val downloadStore: DownloadStore,
+    private val sourceTestStore: SourceTestStore,
 ) {
     private val cache = ConcurrentHashMap<String, ComicSource>()
 
@@ -49,11 +50,13 @@ class SourceRepository(
 
     fun saveSource(config: SourceConfig) {
         sourceStore.save(config)
+        sourceTestStore.remove(config.id)
         invalidate(config.id)
     }
 
     fun deleteSource(sourceId: String) {
         sourceStore.delete(sourceId)
+        sourceTestStore.remove(sourceId)
         invalidate(sourceId)
     }
 
@@ -94,6 +97,14 @@ class SourceRepository(
 
     suspend fun books(series: Series): List<Book> = withContext(Dispatchers.IO) {
         source(series.sourceId).books(series.id)
+    }
+
+    suspend fun nextBook(book: Book): Book? = withContext(Dispatchers.IO) {
+        val seriesId = resolveSeriesId(book) ?: book.seriesId
+        if (seriesId.isBlank()) return@withContext null
+        val siblings = source(book.sourceId).books(seriesId)
+        val index = siblings.indexOfFirst { it.id == book.id }
+        if (index < 0) null else siblings.getOrNull(index + 1)
     }
 
     suspend fun pages(book: Book): List<Page> = withContext(Dispatchers.IO) {

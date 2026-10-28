@@ -19,12 +19,14 @@ class AppContainer(context: Context) {
     val progressStore: ProgressStore = ProgressStore(this.context)
     val readingSettings: ReadingSettingsStore = ReadingSettingsStore(this.context)
     val downloadStore: DownloadStore = DownloadStore(this.context)
+    val sourceTestStore: SourceTestStore = SourceTestStore(this.context)
     val repository: SourceRepository = SourceRepository(
         context = this.context,
         client = httpClient,
         sourceStore = sourceStore,
         progressStore = progressStore,
         downloadStore = downloadStore,
+        sourceTestStore = sourceTestStore,
     )
     val imageLoader: ImageLoader = ImageLoader(repository)
     val downloadManager: DownloadManager = DownloadManager(repository, downloadStore, this.context)
