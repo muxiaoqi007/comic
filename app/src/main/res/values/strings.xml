@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Comic</string>
+    <string name="nav_library">书架</string>
+    <string name="nav_sources">源管理</string>
+</resources>

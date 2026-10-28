@@ -1,0 +1,19 @@
+# Gradle / Android
+.gradle/
+.kotlin/
+build/
+*/build/
+local.properties
+keystore.properties
+*.jks
+*.keystore
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+
+# Local test fixtures and Python cache
+tools/smoke/fixtures/
+tools/smoke/__pycache__/
+*.pyc
