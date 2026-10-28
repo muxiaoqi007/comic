@@ -37,6 +37,9 @@ interface ComicSource : Closeable {
 
     suspend fun updateProgress(book: Book, page: Int, totalPages: Int, completed: Boolean) = Unit
 
+    /** Maps a book to its current series id, when the source can resolve it locally. */
+    fun resolveSeriesId(bookId: String): String? = null
+
     override fun close() = Unit
 }
 

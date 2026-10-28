@@ -45,6 +45,7 @@ class ReaderViewModel(
     private var saveJob: Job? = null
 
     init {
+        viewModelScope.launch { repository.repairProgressSeries(book) }
         load()
     }
 

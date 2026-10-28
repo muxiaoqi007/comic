@@ -147,7 +147,7 @@ fun LibraryScreen(
 
     val hero = remember(resolvedProgress, state.entries) {
         resolvedProgress
-            .filter { !it.completed && it.updatedAt > 0 }
+            .filter { it.updatedAt > 0 }
             .maxByOrNull { it.updatedAt }
             ?.let { progress ->
                 state.entries.firstOrNull {
@@ -302,7 +302,11 @@ private fun ContinueReadingCard(
             Spacer(Modifier.width(14.dp))
             Column(Modifier.weight(1f)) {
                 Text(
-                    text = "继续阅读 · ${entry.series.title}",
+                    text = if (progress.completed) {
+                        "已读完 · ${entry.series.title}"
+                    } else {
+                        "继续阅读 · ${entry.series.title}"
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = Color.White.copy(alpha = 0.68f),
                     maxLines = 1,
@@ -320,8 +324,12 @@ private fun ContinueReadingCard(
                 Spacer(Modifier.height(10.dp))
                 LinearProgressIndicator(
                     progress = {
-                        ((progress.page + 1).toFloat() / progress.totalPages.coerceAtLeast(1))
-                            .coerceIn(0f, 1f)
+                        if (progress.completed) {
+                            1f
+                        } else {
+                            ((progress.page + 1).toFloat() / progress.totalPages.coerceAtLeast(1))
+                                .coerceIn(0f, 1f)
+                        }
                     },
                     color = Color(0xFFF0C98B),
                     trackColor = Color.White.copy(alpha = 0.22f),
@@ -329,7 +337,11 @@ private fun ContinueReadingCard(
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    text = "读到 ${progress.page + 1} / ${progress.totalPages} 页",
+                    text = if (progress.completed) {
+                        "已读完 · 共 ${progress.totalPages} 页"
+                    } else {
+                        "读到 ${progress.page + 1} / ${progress.totalPages} 页"
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = Color.White.copy(alpha = 0.72f),
                 )

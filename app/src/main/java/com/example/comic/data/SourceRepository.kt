@@ -108,10 +108,23 @@ class SourceRepository(
                 totalPages = totalPages,
                 updatedAt = System.currentTimeMillis(),
                 completed = completed,
-                seriesId = book.seriesId,
+                seriesId = resolveSeriesId(book) ?: book.seriesId,
                 bookTitle = book.title,
             ),
         )
+    }
+
+    fun resolveSeriesId(book: Book): String? =
+        runCatching { source(book.sourceId).resolveSeriesId(book.id) }.getOrNull()
+
+    /** Repairs progress saved before series grouping changed, without touching the page. */
+    suspend fun repairProgressSeries(book: Book): ReadingProgress? = withContext(Dispatchers.IO) {
+        val existing = progressStore.get(book.sourceId, book.id) ?: return@withContext null
+        val seriesId = resolveSeriesId(book) ?: return@withContext existing
+        if (existing.seriesId == seriesId) return@withContext existing
+        val updated = existing.copy(seriesId = seriesId)
+        progressStore.save(updated)
+        updated
     }
 
     suspend fun saveProgress(book: Book, page: Int, totalPages: Int, completed: Boolean) {
@@ -122,7 +135,7 @@ class SourceRepository(
             totalPages = totalPages,
             updatedAt = System.currentTimeMillis(),
             completed = completed,
-            seriesId = book.seriesId,
+            seriesId = resolveSeriesId(book) ?: book.seriesId,
             bookTitle = book.title,
         )
         progressStore.save(entry)

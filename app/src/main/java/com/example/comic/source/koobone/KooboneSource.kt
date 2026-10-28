@@ -66,6 +66,7 @@ class KooboneSource(
     private var session: Session? = null
     private val volumes = mutableMapOf<String, KooboneVolume>()
     private val seriesVolumes = mutableMapOf<String, List<KooboneVolume>>()
+    private val volumeSeriesKeys = mutableMapOf<String, String>()
 
     override suspend fun testConnection() {
         withContext(Dispatchers.IO) {
@@ -255,6 +256,9 @@ class KooboneSource(
             targetFile.length() > 0
         }
 
+    override fun resolveSeriesId(bookId: String): String? =
+        synchronized(volumes) { volumeSeriesKeys[bookId] }
+
     override fun close() {
         session = null
     }
@@ -340,8 +344,10 @@ class KooboneSource(
         synchronized(volumes) {
             items.forEach { volumes[it.fileMd5] = it }
             seriesVolumes.clear()
+            volumeSeriesKeys.clear()
             groupVolumes(items).forEach { (key, volumes) ->
                 seriesVolumes[key] = volumes
+                volumes.forEach { volumeSeriesKeys[it.fileMd5] = key }
             }
         }
     }
