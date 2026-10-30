@@ -29,6 +29,14 @@ internal fun normalizeBaseUrl(value: String?): HttpUrl {
     return parsed
 }
 
+/**
+ * Maps a transport-level failure to [AdaptiveBaseUrl.ConnectivityFailure] so
+ * sources can fail over to their other address. HTTP error responses (4xx/5xx)
+ * are the server speaking — those are not address problems.
+ */
+internal fun connectivityFailure(base: HttpUrl, e: IOException): AdaptiveBaseUrl.ConnectivityFailure =
+    AdaptiveBaseUrl.ConnectivityFailure(base, e)
+
 internal fun HttpUrl.appendPath(path: String): HttpUrl {
     val trimmed = path.trim().trim('/')
     if (trimmed.isEmpty()) return this

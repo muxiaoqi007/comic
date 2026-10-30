@@ -11,6 +11,7 @@ import com.example.comic.source.SourceException
 import com.example.comic.source.remote.AdaptiveBaseUrl
 import com.example.comic.source.remote.appendPath
 import com.example.comic.source.remote.authorize
+import com.example.comic.source.remote.connectivityFailure
 import com.example.comic.source.remote.execute
 import com.example.comic.source.remote.normalizeBaseUrl
 import kotlinx.coroutines.Dispatchers
@@ -26,6 +27,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.IOException
 import java.io.InputStream
 
 class KomgaSource(
@@ -37,10 +39,16 @@ class KomgaSource(
     private val publicRoot = config.publicBaseUrl
         ?.takeIf { it.isNotBlank() }
         ?.let { normalizeBaseUrl(it) }
-    private val adaptive = AdaptiveBaseUrl(context, client, localRoot, publicRoot) { builder ->
-        val key = config.apiKey?.takeIf { it.isNotBlank() }
-        if (key != null) builder.header("X-API-Key", key) else builder.authorize(config)
-    }
+    private val adaptive = AdaptiveBaseUrl(
+        context = context,
+        client = client,
+        local = localRoot,
+        public = publicRoot,
+        authorize = { builder ->
+            val key = config.apiKey?.takeIf { it.isNotBlank() }
+            if (key != null) builder.header("X-API-Key", key) else builder.authorize(config)
+        },
+    )
     private var base = localRoot.appendPath("/api/v1")
     private val json = Json {
         ignoreUnknownKeys = true
@@ -50,138 +58,147 @@ class KomgaSource(
         base = adaptive.resolve().appendPath("/api/v1")
     }
 
+    private suspend fun <T> withFailover(block: suspend () -> T): T {
+        ensureBase()
+        return try {
+            block()
+        } catch (e: IOException) {
+            if (e is AdaptiveBaseUrl.ConnectivityFailure) throw e
+            val failed = base
+            base = adaptive.resolve(connectivityFailure(failed, e)).appendPath("/api/v1")
+            adaptive.succeed(base)
+            block()
+        }
+    }
+
     override suspend fun testConnection() {
-        ensureBase()
         withContext(Dispatchers.IO) {
-            val libraries = decode<List<KomgaLibrary>>(request("/libraries"))
-            libraries.firstOrNull()?.let { series(it.id) }
+            withFailover {
+                val libraries = decode<List<KomgaLibrary>>(request("/libraries"))
+                libraries.firstOrNull()?.let { series(it.id) }
+            }
         }
     }
 
-    override suspend fun libraries(): List<Library> {
-        ensureBase()
-        return withContext(Dispatchers.IO) {
-        val dto = decode<List<KomgaLibrary>>(request("/libraries"))
-        dto.map { Library(id = it.id, sourceId = id, name = it.name.ifBlank { "Komga" }) }
+    override suspend fun libraries(): List<Library> = withContext(Dispatchers.IO) {
+        withFailover {
+            val dto = decode<List<KomgaLibrary>>(request("/libraries"))
+            dto.map { Library(id = it.id, sourceId = id, name = it.name.ifBlank { "Komga" }) }
         }
     }
 
-    override suspend fun series(libraryId: String): List<Series> {
-        ensureBase()
-        return withContext(Dispatchers.IO) {
-        val result = mutableListOf<Series>()
-        var page = 0
-        while (true) {
-            val dto = decode<KomgaPageResponse<KomgaSeries>>(listSeries(libraryId, page))
-            result += dto.content.map { series ->
-                Series(
-                    id = series.id,
+    override suspend fun series(libraryId: String): List<Series> = withContext(Dispatchers.IO) {
+        withFailover {
+            val result = mutableListOf<Series>()
+            var page = 0
+            while (true) {
+                val dto = decode<KomgaPageResponse<KomgaSeries>>(listSeries(libraryId, page))
+                result += dto.content.map { series ->
+                    Series(
+                        id = series.id,
+                        sourceId = id,
+                        libraryId = libraryId,
+                        title = series.metadata?.title?.takeIf { it.isNotBlank() } ?: series.name,
+                        bookCount = series.booksCount,
+                        description = series.metadata?.summary?.takeIf { it.isNotBlank() },
+                    )
+                }
+                if (dto.content.size < PAGE_SIZE) break
+                page++
+            }
+            result
+        }
+    }
+
+    override suspend fun books(seriesId: String): List<Book> = withContext(Dispatchers.IO) {
+        withFailover {
+            val result = mutableListOf<Book>()
+            var page = 0
+            while (true) {
+                val dto = decode<KomgaPageResponse<KomgaBook>>(listBooks(seriesId, page))
+                result += dto.content.map { book ->
+                    Book(
+                        id = book.id,
+                        sourceId = id,
+                        seriesId = seriesId,
+                        title = book.metadata?.title?.takeIf { it.isNotBlank() } ?: book.name,
+                        number = book.number?.contentOrNull,
+                        pageCount = book.media?.pagesCount,
+                        size = book.sizeBytes,
+                    )
+                }
+                if (dto.content.size < PAGE_SIZE) break
+                page++
+            }
+            result
+        }
+    }
+
+    override suspend fun pages(book: Book): List<Page> = withContext(Dispatchers.IO) {
+        withFailover {
+            val dto = decode<List<KomgaPageEntry>>(request("/books/${book.id}/pages"))
+            dto.sortedBy { it.number }.mapIndexed { index, page ->
+                Page(
                     sourceId = id,
-                    libraryId = libraryId,
-                    title = series.metadata?.title?.takeIf { it.isNotBlank() } ?: series.name,
-                    bookCount = series.booksCount,
-                    description = series.metadata?.summary?.takeIf { it.isNotBlank() },
+                    bookId = book.id,
+                    index = index,
+                    key = page.number.toString(),
+                    mimeType = page.mediaType,
                 )
             }
-            if (dto.content.size < PAGE_SIZE) break
-            page++
-        }
-        result
         }
     }
 
-    override suspend fun books(seriesId: String): List<Book> {
-        ensureBase()
-        return withContext(Dispatchers.IO) {
-        val result = mutableListOf<Book>()
-        var page = 0
-        while (true) {
-            val dto = decode<KomgaPageResponse<KomgaBook>>(listBooks(seriesId, page))
-            result += dto.content.map { book ->
-                Book(
-                    id = book.id,
-                    sourceId = id,
-                    seriesId = seriesId,
-                    title = book.metadata?.title?.takeIf { it.isNotBlank() } ?: book.name,
-                    number = book.number?.contentOrNull,
-                    pageCount = book.media?.pagesCount,
-                    size = book.sizeBytes,
-                )
+    override suspend fun openPage(page: Page): InputStream = withContext(Dispatchers.IO) {
+        withFailover {
+            val builder = Request.Builder().url(url("/books/${page.bookId}/pages/${page.key}")).get()
+            builder.auth()
+            val response = client.execute(builder.build())
+            if (!response.isSuccessful) {
+                response.close()
+                throw SourceException("加载页面失败：HTTP ${response.code}")
             }
-            if (dto.content.size < PAGE_SIZE) break
-            page++
-        }
-        result
-        }
-    }
-
-    override suspend fun pages(book: Book): List<Page> {
-        ensureBase()
-        return withContext(Dispatchers.IO) {
-        val dto = decode<List<KomgaPageEntry>>(request("/books/${book.id}/pages"))
-        dto.sortedBy { it.number }.mapIndexed { index, page ->
-            Page(
-                sourceId = id,
-                bookId = book.id,
-                index = index,
-                key = page.number.toString(),
-                mimeType = page.mediaType,
-            )
-        }
+            response.body?.byteStream() ?: run {
+                response.close()
+                throw SourceException("页面内容为空")
+            }
         }
     }
 
-    override suspend fun openPage(page: Page): InputStream {
-        ensureBase()
-        return withContext(Dispatchers.IO) {
-        val builder = Request.Builder().url(url("/books/${page.bookId}/pages/${page.key}")).get()
-        builder.auth()
-        val response = client.execute(builder.build())
-        if (!response.isSuccessful) {
-            response.close()
-            throw SourceException("加载页面失败：HTTP ${response.code}")
-        }
-        response.body?.byteStream() ?: run {
-            response.close()
-            throw SourceException("页面内容为空")
-        }
-        }
-    }
-
-    override suspend fun openCover(series: Series): InputStream? {
-        ensureBase()
-        return withContext(Dispatchers.IO) {
-        val builder = Request.Builder().url(url("/series/${series.id}/thumbnail")).get()
-        builder.auth()
-        val response = client.execute(builder.build())
-        if (!response.isSuccessful) {
-            response.close()
-            return@withContext null
-        }
-        response.body?.byteStream() ?: run {
-            response.close()
-            null
-        }
+    override suspend fun openCover(series: Series): InputStream? = withContext(Dispatchers.IO) {
+        withFailover {
+            val builder = Request.Builder().url(url("/series/${series.id}/thumbnail")).get()
+            builder.auth()
+            val response = client.execute(builder.build())
+            if (!response.isSuccessful) {
+                response.close()
+                return@withFailover null
+            }
+            response.body?.byteStream() ?: run {
+                response.close()
+                null
+            }
         }
     }
 
     override suspend fun updateProgress(book: Book, page: Int, totalPages: Int, completed: Boolean) {
-        ensureBase()
         withContext(Dispatchers.IO) {
-            val payload = json.encodeToString(
-                ReadProgressUpdate(
-                    page = (page + 1).coerceIn(1, totalPages.coerceAtLeast(1)),
-                    completed = completed,
-                ),
-            )
-            val builder = Request.Builder()
-                .url(url("/books/${book.id}/read-progress"))
-                .patch(payload.toRequestBody(JSON_MEDIA_TYPE))
-            builder.auth()
-            val response = client.execute(builder.build())
-            response.use {
-                if (!it.isSuccessful) {
-                    throw SourceException("同步阅读进度失败：HTTP ${it.code}")
+            withFailover {
+                val payload = json.encodeToString(
+                    ReadProgressUpdate(
+                        page = (page + 1).coerceIn(1, totalPages.coerceAtLeast(1)),
+                        completed = completed,
+                    ),
+                )
+                val builder = Request.Builder()
+                    .url(url("/books/${book.id}/read-progress"))
+                    .patch(payload.toRequestBody(JSON_MEDIA_TYPE))
+                builder.auth()
+                val response = client.execute(builder.build())
+                response.use {
+                    if (!it.isSuccessful) {
+                        throw SourceException("同步阅读进度失败：HTTP ${it.code}")
+                    }
                 }
             }
         }

@@ -7,8 +7,8 @@ A native Android comic reader built with Kotlin and Jetpack Compose.
 - **Sources**
   - Edit existing sources without losing reading progress or downloads
   - Local folders via Storage Access Framework (CBZ/ZIP, EPUB, PDF and image folders; loose files appear as individual books)
-  - WebDAV (remote CBZ reading over HTTP range requests; optional public address with LAN-first automatic switching)
-  - Komga (legacy GET and current `POST /series/list` APIs; optional public address with LAN-first automatic switching)
+  - WebDAV (remote CBZ reading over HTTP range requests; optional public address with LAN-first automatic switching and per-request failover)
+  - Komga (legacy GET and current `POST /series/list` APIs; optional public address with LAN-first automatic switching and per-request failover)
   - Koobone (email login, volume grouping, on-demand EPUB reading)
   - Z-Library personal account (search and download EPUB/PDF into `Download/Comic`; open with an external reader)
   - Connection test with the last result persisted across restarts
@@ -54,7 +54,7 @@ keyPassword=...
 
 ## Version
 
-Current version: **0.3.20** (versionCode 23). The version is also shown on the Sources screen.
+Current version: **0.3.21** (versionCode 24). The version is also shown on the Sources screen.
 
 ## Notes
 

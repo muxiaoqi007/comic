@@ -12,6 +12,7 @@ import com.example.comic.source.SourceException
 import com.example.comic.source.remote.AdaptiveBaseUrl
 import com.example.comic.source.remote.appendPath
 import com.example.comic.source.remote.authorize
+import com.example.comic.source.remote.connectivityFailure
 import com.example.comic.source.remote.execute
 import com.example.comic.source.remote.normalizeBaseUrl
 import com.example.comic.util.isArchiveName
@@ -29,6 +30,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import org.apache.commons.compress.archivers.zip.ZipFile
 import org.xmlpull.v1.XmlPullParser
 import java.io.ByteArrayInputStream
+import java.io.IOException
 import java.io.InputStream
 import java.nio.ByteBuffer
 import java.nio.channels.ClosedChannelException
@@ -43,61 +45,80 @@ class WebDavSource(
     private val publicRoot = config.publicBaseUrl
         ?.takeIf { it.isNotBlank() }
         ?.let { normalizeBaseUrl(it).appendPath(config.rootPath) }
-    private val adaptive = AdaptiveBaseUrl(context, client, localRoot, publicRoot) {
-        it.authorize(config)
-    }
+    private val adaptive = AdaptiveBaseUrl(
+        context = context,
+        client = client,
+        local = localRoot,
+        public = publicRoot,
+        authorize = { builder -> builder.authorize(config) },
+    )
     private var base: HttpUrl = localRoot
     private var root: HttpUrl = localRoot
 
     private suspend fun ensureBase() {
-        val selected = adaptive.resolve()
-        base = selected
-        root = selected
+        base = adaptive.resolve()
+        root = base
+    }
+
+    /**
+     * Runs [block] on the chosen base; on a transport failure the selector is
+     * told, the other address is picked, and the request runs once more.
+     */
+    private suspend fun <T> withFailover(block: suspend () -> T): T {
+        ensureBase()
+        return try {
+            block()
+        } catch (e: IOException) {
+            if (e is AdaptiveBaseUrl.ConnectivityFailure) throw e
+            val retryBase = adaptive.resolve(connectivityFailure(base, e))
+            base = retryBase
+            root = retryBase
+            adaptive.succeed(retryBase)
+            block()
+        }
     }
 
     override suspend fun testConnection() {
         ensureBase()
-        withContext(Dispatchers.IO) { propfind(root, depth = "0") }
+        withContext(Dispatchers.IO) { withFailover { propfind(root, depth = "0") } }
     }
 
     override suspend fun libraries(): List<Library> = withContext(Dispatchers.IO) {
         listOf(Library(id = ROOT_LIBRARY_ID, sourceId = id, name = config.name))
     }
 
-    override suspend fun series(libraryId: String): List<Series> {
-        ensureBase()
-        return withContext(Dispatchers.IO) {
-        val entries = propfind(root, depth = "1").filterNot { it.isSelf(root) }
-        val directories = entries
-            .filter { it.isCollection }
-            .sortedWith { a, b -> naturalCompare(a.name, b.name) }
-            .map { entry ->
-                Series(
-                    id = entry.href,
+    override suspend fun series(libraryId: String): List<Series> = withContext(Dispatchers.IO) {
+        withFailover {
+            val entries = propfind(root, depth = "1").filterNot { it.isSelf(root) }
+            val directories = entries
+                .filter { it.isCollection }
+                .sortedWith { a, b -> naturalCompare(a.name, b.name) }
+                .map { entry ->
+                    Series(
+                        id = entry.href,
+                        sourceId = id,
+                        libraryId = libraryId,
+                        title = entry.name,
+                    )
+                }
+
+            val looseArchives = entries.count { !it.isCollection && isArchiveName(it.name) }
+            if (looseArchives > 0) {
+                directories + Series(
+                    id = SINGLES_ID,
                     sourceId = id,
                     libraryId = libraryId,
-                    title = entry.name,
+                    title = "单本",
+                    bookCount = looseArchives,
                 )
+            } else {
+                directories
             }
-
-        val looseArchives = entries.count { !it.isCollection && isArchiveName(it.name) }
-        if (looseArchives > 0) {
-            directories + Series(
-                id = SINGLES_ID,
-                sourceId = id,
-                libraryId = libraryId,
-                title = "单本",
-                bookCount = looseArchives,
-            )
-        } else {
-            directories
-        }
         }
     }
 
-    override suspend fun books(seriesId: String): List<Book> {
-        ensureBase()
-        return withContext(Dispatchers.IO) {
+    override suspend fun books(seriesId: String): List<Book> = withContext(Dispatchers.IO) {
+        withFailover {
         val directory = if (seriesId == SINGLES_ID) root else parseHref(seriesId)
         val entries = propfind(directory, depth = "1").filterNot { it.isSelf(directory) }
         val books = entries.mapNotNull { entry ->
@@ -125,9 +146,8 @@ class WebDavSource(
         }
     }
 
-    override suspend fun pages(book: Book): List<Page> {
-        ensureBase()
-        return withContext(Dispatchers.IO) {
+    override suspend fun pages(book: Book): List<Page> = withContext(Dispatchers.IO) {
+        withFailover {
         val url = parseHref(book.id)
         if (isArchiveName(url.encodedPath)) {
             withZip(book) { zip ->
@@ -162,9 +182,8 @@ class WebDavSource(
         }
     }
 
-    override suspend fun openPage(page: Page): InputStream {
-        ensureBase()
-        return withContext(Dispatchers.IO) {
+    override suspend fun openPage(page: Page): InputStream = withContext(Dispatchers.IO) {
+        withFailover {
         val bookUrl = parseHref(page.bookId)
         if (!isArchiveName(bookUrl.encodedPath)) {
             val request = Request.Builder().url(parseHref(page.key)).get()
@@ -174,7 +193,7 @@ class WebDavSource(
                 response.close()
                 throw SourceException("加载页面失败：HTTP ${response.code}")
             }
-            return@withContext response.body?.byteStream() ?: run {
+            return@withFailover response.body?.byteStream() ?: run {
                 response.close()
                 throw SourceException("页面内容为空")
             }

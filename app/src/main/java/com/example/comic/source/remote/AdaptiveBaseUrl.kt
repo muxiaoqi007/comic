@@ -16,9 +16,14 @@ import java.util.concurrent.TimeUnit
 
 /**
  * Picks the LAN or public address for a NAS source. On Wi-Fi/Ethernet it
- * probes the LAN address first; on cellular it goes straight to the public
- * address. The choice is cached briefly and re-evaluated when the active
- * network changes, so moving between home and mobile data switches naturally.
+ * prefers the LAN address; on cellular it goes straight to the public one.
+ *
+ * The probe only ranks candidates. Callers report connection failures back
+ * through [resolve]; a base that just failed at connect time is avoided for
+ * a while, and a base that served a successful request is pinned until it
+ * fails. A slow NAS boot or a router without NAT loopback therefore degrades
+ * to the working address after one failed request instead of looping on the
+ * wrong one.
  */
 class AdaptiveBaseUrl(
     context: Context?,
@@ -26,37 +31,76 @@ class AdaptiveBaseUrl(
     private val local: HttpUrl,
     private val public: HttpUrl?,
     private val authorize: (Request.Builder) -> Unit = {},
+    private val probeOverride: ((HttpUrl) -> Boolean)? = null,
 ) {
     private val connectivity =
         context?.getSystemService(Context.CONNECTIVITY_SERVICE) as? ConnectivityManager
     private val probeClient = client.newBuilder()
-        .connectTimeout(1_200, TimeUnit.MILLISECONDS)
-        .readTimeout(1_200, TimeUnit.MILLISECONDS)
-        .callTimeout(1_600, TimeUnit.MILLISECONDS)
+        .connectTimeout(PROBE_CONNECT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        .readTimeout(PROBE_CALL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+        .callTimeout(PROBE_CALL_TIMEOUT_MS, TimeUnit.MILLISECONDS)
         .build()
     private val mutex = Mutex()
-    private var chosen: HttpUrl? = null
-    private var chosenNetwork: Network? = null
-    private var chosenAt = 0L
 
-    suspend fun resolve(): HttpUrl = mutex.withLock {
-        val network = activeNetwork()
+    @Volatile private var pinned: HttpUrl? = null
+    @Volatile private var pinnedNetwork: Network? = null
+    @Volatile private var failedBase: HttpUrl? = null
+    @Volatile private var failedAt = 0L
+    @Volatile private var probedNetwork: Network? = null
+    @Volatile private var probedReachable = false
+    @Volatile private var probedAt = 0L
+
+    /**
+     * Returns the address to try next. [lastFailure] carries the previous
+     * attempt's [ConnectivityFailure] so the selector can stop recommending
+     * an address that cannot be connected to.
+     */
+    suspend fun resolve(lastFailure: Throwable? = null): HttpUrl = mutex.withLock {
         val now = System.currentTimeMillis()
-        val cached = chosen
-        if (
-            cached != null &&
-            chosenNetwork == network &&
-            now - chosenAt < CACHE_TTL_MS
-        ) {
-            return cached
+        if (lastFailure is ConnectivityFailure) {
+            failedBase = lastFailure.base
+            failedAt = now
+            if (pinned == lastFailure.base) pinned = null
         }
+
+        val network = activeNetwork()
+        pinned?.takeIf { pinnedNetwork == network }?.let { return it }
+        pinned = null
+
         val cellular = isCellular(network)
-        val reachable = if (public != null && !cellular) probe(local) else false
-        val result = chooseBase(local, public, cellular, reachable)
-        chosen = result
-        chosenNetwork = network
-        chosenAt = now
-        result
+        val bases = ordered(cellular)
+        val failed = failedBase?.takeIf { now - failedAt < FAILURE_BLACKOUT_MS }
+        var candidate = bases.firstOrNull { it != failed } ?: bases.first()
+
+        // Probe may wrongly report the LAN as down; never let it demote the
+        // LAN while the public address is the one that is actually failing.
+        if (!cellular && public != null && candidate == local && public != failed) {
+            if (!localProbe(network, now)) candidate = public
+        }
+        candidate
+    }
+
+    /** Pins a base that just served a successful request. */
+    fun succeed(base: HttpUrl) {
+        synchronized(this) {
+            if (failedBase == base) return
+            pinned = base
+            pinnedNetwork = activeNetwork()
+        }
+    }
+
+    private fun ordered(cellular: Boolean): List<HttpUrl> =
+        if (cellular) listOfNotNull(public ?: local) else listOf(local) + listOfNotNull(public)
+
+    private suspend fun localProbe(network: Network?, now: Long): Boolean {
+        if (probedNetwork == network && now - probedAt < PROBE_TTL_MS) {
+            return probedReachable
+        }
+        val reachable = probe(local)
+        probedNetwork = network
+        probedReachable = reachable
+        probedAt = now
+        return reachable
     }
 
     private fun activeNetwork(): Network? =
@@ -71,33 +115,33 @@ class AdaptiveBaseUrl(
             !caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
     }
 
-    private suspend fun probe(url: HttpUrl): Boolean = withContext(Dispatchers.IO) {
-        val builder = Request.Builder()
-            .url(url)
-            .head()
-            .header("User-Agent", "Comic/1.0")
-        authorize(builder)
-        val request = builder.build()
-        try {
-            probeClient.newCall(request).execute().use { true }
-        } catch (e: IOException) {
-            false
+    private suspend fun probe(url: HttpUrl): Boolean {
+        probeOverride?.let { return it(url) }
+        return withContext(Dispatchers.IO) {
+            val builder = Request.Builder()
+                .url(url)
+                .head()
+                .header("User-Agent", "Comic/1.0")
+            authorize(builder)
+            val request = builder.build()
+            try {
+                probeClient.newCall(request).execute().use { true }
+            } catch (e: IOException) {
+                false
+            }
         }
     }
 
-    private companion object {
-        const val CACHE_TTL_MS = 60_000L
-    }
-}
+    /** Transport-level failure on a specific base; the selector's signal. */
+    class ConnectivityFailure(
+        val base: HttpUrl,
+        cause: Throwable,
+    ) : IOException("无法连接 ${base.host}：${cause.message?.take(80)}", cause)
 
-internal fun chooseBase(
-    local: HttpUrl,
-    public: HttpUrl?,
-    cellular: Boolean,
-    localReachable: Boolean,
-): HttpUrl = when {
-    public == null -> local
-    cellular -> public
-    localReachable -> local
-    else -> public
+    private companion object {
+        const val PROBE_CONNECT_TIMEOUT_MS = 2_500L
+        const val PROBE_CALL_TIMEOUT_MS = 3_000L
+        const val PROBE_TTL_MS = 60_000L
+        const val FAILURE_BLACKOUT_MS = 5 * 60_000L
+    }
 }
