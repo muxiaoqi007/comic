@@ -11,9 +11,11 @@ import com.example.comic.model.SourceConfig
 import com.example.comic.source.ComicSource
 import com.example.comic.source.SourceException
 import com.example.comic.source.epub.EpubArchive
+import com.example.comic.source.pdf.PdfArchive
 import com.example.comic.util.isArchiveName
 import com.example.comic.util.isEpubName
 import com.example.comic.util.isImageName
+import com.example.comic.util.isPdfName
 import com.example.comic.util.mimeForName
 import com.example.comic.util.naturalCompare
 import com.example.comic.util.titleWithoutExtension
@@ -153,6 +155,19 @@ class LocalSource(
                 }
             }
 
+            document.isFile && isPdfName(document.name) -> {
+                val count = PdfArchive.pageCount(resolver, document.uri)
+                (0 until count).map { index ->
+                    Page(
+                        sourceId = id,
+                        bookId = book.id,
+                        index = index,
+                        key = "$PDF_PAGE_PREFIX$index",
+                        mimeType = "image/jpeg",
+                    )
+                }
+            }
+
             document.isFile && isBookName(document.name) -> {
                 val entries = if (isEpubName(document.name)) {
                     withZip(document.uri) { zip -> EpubArchive.pageEntries(zip) }
@@ -175,6 +190,13 @@ class LocalSource(
     }
 
     override suspend fun openPage(page: Page): InputStream = withContext(Dispatchers.IO) {
+        if (page.key.startsWith(PDF_PAGE_PREFIX)) {
+            val index = page.key.removePrefix(PDF_PAGE_PREFIX).toIntOrNull()
+                ?: throw SourceException("无效的 PDF 页码")
+            return@withContext ByteArrayInputStream(
+                PdfArchive.renderPage(resolver, Uri.parse(page.bookId), index),
+            )
+        }
         if (page.key.startsWith("content://")) {
             return@withContext resolver.openInputStream(Uri.parse(page.key))
                 ?: throw SourceException("无法打开页面")
@@ -185,6 +207,10 @@ class LocalSource(
 
     override suspend fun openCover(series: Series): InputStream? = withContext(Dispatchers.IO) {
         val firstBook = books(series.id).firstOrNull() ?: return@withContext null
+        val document = runCatching { resolve(firstBook.id) }.getOrNull()
+        if (document != null && document.isFile && isPdfName(document.name)) {
+            return@withContext ByteArrayInputStream(PdfArchive.renderCover(resolver, document.uri))
+        }
         val firstPage = pages(firstBook).firstOrNull() ?: return@withContext null
         openPage(firstPage)
     }
@@ -221,21 +247,26 @@ class LocalSource(
     private fun countBooks(directory: DocumentFile): Int {
         val children = directory.listFiles()
         val directImages = children.any { it.isFile && isImageName(it.name) }
-        val archives = children.count { it.isFile && isBookName(it.name) }
+        val files = children.count { it.isFile && isBookName(it.name) }
         val imageFolders = children.count { child ->
             child.isDirectory && child.listFiles().any { it.isFile && isImageName(it.name) }
         }
-        return archives + imageFolders + if (directImages) 1 else 0
+        return files + imageFolders + if (directImages) 1 else 0
     }
 
     private fun isBookName(name: String?): Boolean =
-        isArchiveName(name) || isEpubName(name)
+        isArchiveName(name) || isEpubName(name) || isPdfName(name)
 
     private fun DocumentFile.toArchiveBook(seriesId: String): Book = Book(
         id = uri.toString(),
         sourceId = id,
         seriesId = seriesId,
         title = titleWithoutExtension(name.orEmpty()),
+        pageCount = if (isPdfName(name)) {
+            runCatching { PdfArchive.pageCount(resolver, uri) }.getOrNull()
+        } else {
+            null
+        },
         size = length(),
         updatedAt = lastModified().takeIf { it > 0 },
     )
@@ -267,5 +298,6 @@ class LocalSource(
     private companion object {
         const val ROOT_LIBRARY_ID = "root"
         const val SINGLES_ID = "local:singles"
+        const val PDF_PAGE_PREFIX = "pdf:"
     }
 }

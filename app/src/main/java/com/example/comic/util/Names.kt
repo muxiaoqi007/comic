@@ -18,6 +18,9 @@ fun isArchiveName(name: String?): Boolean {
 fun isEpubName(name: String?): Boolean =
     name?.substringAfterLast('.', "")?.lowercase() == "epub"
 
+fun isPdfName(name: String?): Boolean =
+    name?.substringAfterLast('.', "")?.lowercase() == "pdf"
+
 fun mimeForName(name: String): String? = when (name.substringAfterLast('.', "").lowercase()) {
     "jpg", "jpeg" -> "image/jpeg"
     "png" -> "image/png"
@@ -25,6 +28,7 @@ fun mimeForName(name: String): String? = when (name.substringAfterLast('.', "").
     "gif" -> "image/gif"
     "bmp" -> "image/bmp"
     "avif" -> "image/avif"
+    "pdf" -> "application/pdf"
     else -> null
 }
 
