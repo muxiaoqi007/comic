@@ -14,6 +14,11 @@ import com.example.comic.source.komga.KomgaSource
 import com.example.comic.source.koobone.KooboneSource
 import com.example.comic.source.local.LocalSource
 import com.example.comic.source.webdav.WebDavSource
+import com.example.comic.source.zlibrary.ZlibraryBook
+import com.example.comic.source.zlibrary.ZlibraryDownload
+import com.example.comic.source.zlibrary.ZlibraryProfile
+import com.example.comic.source.zlibrary.ZlibrarySearchPage
+import com.example.comic.source.zlibrary.ZlibrarySource
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.StateFlow
@@ -28,6 +33,7 @@ class SourceRepository(
     private val progressStore: ProgressStore,
     private val downloadStore: DownloadStore,
     private val sourceTestStore: SourceTestStore,
+    private val shelfCacheStore: ShelfCacheStore,
 ) {
     private val cache = ConcurrentHashMap<String, ComicSource>()
 
@@ -37,9 +43,10 @@ class SourceRepository(
     fun source(config: SourceConfig): ComicSource = cache.getOrPut(config.id) {
         when (config.type) {
             SourceType.LOCAL -> LocalSource(context, config)
-            SourceType.WEBDAV -> WebDavSource(client, config)
-            SourceType.KOMGA -> KomgaSource(client, config)
+            SourceType.WEBDAV -> WebDavSource(client, config, context)
+            SourceType.KOMGA -> KomgaSource(client, config, context)
             SourceType.KOOBONE -> KooboneSource(context, client, config, downloadStore)
+            SourceType.ZLIBRARY -> ZlibrarySource(client, config)
         }
     }
 
@@ -51,12 +58,21 @@ class SourceRepository(
     fun saveSource(config: SourceConfig) {
         sourceStore.save(config)
         sourceTestStore.remove(config.id)
+        shelfCacheStore.remove(config.id)
         invalidate(config.id)
+    }
+
+    fun setSourceEnabled(sourceId: String, enabled: Boolean) {
+        val config = sourceStore.get(sourceId) ?: return
+        if (config.enabled == enabled) return
+        sourceStore.save(config.copy(enabled = enabled))
+        invalidate(sourceId)
     }
 
     fun deleteSource(sourceId: String) {
         sourceStore.delete(sourceId)
         sourceTestStore.remove(sourceId)
+        shelfCacheStore.remove(sourceId)
         invalidate(sourceId)
     }
 
@@ -116,7 +132,63 @@ class SourceRepository(
     }
 
     suspend fun openCoverBytes(series: Series): ByteArray? = withContext(Dispatchers.IO) {
+        if (sourceStore.get(series.sourceId)?.enabled == false) return@withContext null
         source(series.sourceId).openCover(series)?.use { it.readBytes() }
+    }
+
+    fun sourceType(sourceId: String): SourceType? = sourceStore.get(sourceId)?.type
+
+    suspend fun fetchBytes(url: String, headers: Map<String, String> = emptyMap()): ByteArray? =
+        withContext(Dispatchers.IO) {
+            val builder = okhttp3.Request.Builder().url(url)
+            headers.forEach { (name, value) -> builder.header(name, value) }
+            runCatching {
+                client.newCall(builder.get().build()).execute().use { response ->
+                    if (response.isSuccessful) response.body?.bytes() else null
+                }
+            }.getOrNull()
+        }
+
+    fun zlibrarySource(sourceId: String): ZlibrarySource =
+        source(sourceId) as? ZlibrarySource
+            ?: throw SourceException("该源不是 Z-Library 源")
+
+    suspend fun zlibraryConnect(sourceId: String): ZlibraryProfile? =
+        withContext(Dispatchers.IO) { zlibrarySource(sourceId).connect() }
+
+    suspend fun zlibraryProfile(sourceId: String): ZlibraryProfile? =
+        withContext(Dispatchers.IO) { zlibrarySource(sourceId).profile() }
+
+    suspend fun zlibrarySearch(
+        sourceId: String,
+        query: String,
+        page: Int,
+        extensions: List<String>,
+    ): ZlibrarySearchPage = withContext(Dispatchers.IO) {
+        zlibrarySource(sourceId).search(query, page, extensions)
+    }
+
+    suspend fun zlibraryDownload(
+        sourceId: String,
+        book: ZlibraryBook,
+        targetFile: java.io.File,
+        onProgress: (Long, Long) -> Unit,
+    ): ZlibraryDownload = withContext(Dispatchers.IO) {
+        zlibrarySource(sourceId).download(book, targetFile, onProgress)
+    }
+
+    suspend fun zlibraryCover(sourceId: String, url: String): ByteArray? =
+        withContext(Dispatchers.IO) { zlibrarySource(sourceId).coverBytes(url) }
+
+    fun coverCacheToken(series: Series): String {
+        val config = sourceStore.get(series.sourceId) ?: return ""
+        return listOf(
+            config.type,
+            config.treeUri,
+            config.baseUrl,
+            config.rootPath,
+            config.username,
+        ).joinToString("|")
     }
 
     fun saveProgressImmediate(book: Book, page: Int, totalPages: Int, completed: Boolean) {

@@ -1,10 +1,5 @@
 package com.example.comic.data
 
-import android.content.ContentValues
-import android.net.Uri
-import android.os.Build
-import android.os.Environment
-import android.provider.MediaStore
 import com.example.comic.model.Book
 import com.example.comic.model.DownloadRecord
 import com.example.comic.model.storageKey
@@ -94,7 +89,12 @@ class DownloadManager(
                     }
                 }
                 val publicUri = runCatching {
-                    moveToPublicDownloads(temp, exportFileName(book.title))
+                    PublicDownloads.publish(
+                        appContext,
+                        temp,
+                        exportFileName(book.title),
+                        "application/epub+zip",
+                    )
                 }.getOrNull()
 
                 val storedPath: String
@@ -128,6 +128,7 @@ class DownloadManager(
                         sizeBytes = result.sizeBytes,
                         filePath = storedPath,
                         contentUri = publicUri,
+                        mimeType = "application/epub+zip",
                         coverPath = coverFile
                             .takeIf { hasCover && it.length() > 0 }
                             ?.absolutePath,
@@ -148,33 +149,6 @@ class DownloadManager(
             } finally {
                 jobs.remove(key)
             }
-        }
-    }
-
-    private fun moveToPublicDownloads(sourceFile: File, fileName: String): String? {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
-        val resolver = appContext.contentResolver
-        val values = ContentValues().apply {
-            put(MediaStore.Downloads.DISPLAY_NAME, fileName)
-            put(MediaStore.Downloads.MIME_TYPE, "application/epub+zip")
-            put(
-                MediaStore.Downloads.RELATIVE_PATH,
-                "${Environment.DIRECTORY_DOWNLOADS}/Comic",
-            )
-            put(MediaStore.Downloads.IS_PENDING, 1)
-        }
-        val uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values)
-            ?: return null
-        return try {
-            resolver.openOutputStream(uri)?.use { output ->
-                sourceFile.inputStream().use { input -> input.copyTo(output) }
-            } ?: error("无法写入 Download/Comic")
-            val done = ContentValues().apply { put(MediaStore.Downloads.IS_PENDING, 0) }
-            resolver.update(uri, done, null, null)
-            uri.toString()
-        } catch (e: Exception) {
-            runCatching { resolver.delete(uri, null, null) }
-            throw e
         }
     }
 

@@ -73,6 +73,33 @@ KOOBONE_EMAIL = "reader@example.com"
 KOOBONE_PASSWORD = "koobone"
 KOOBONE_UIN = 1001
 
+ZLIBRARY_EMAIL = "reader@example.com"
+ZLIBRARY_PASSWORD = "zlibrary"
+ZLIBRARY_BOOKS = [
+    {
+        "id": "zl-1",
+        "hash": "abc123",
+        "title": "Z-Library 测试漫画",
+        "author": "Test Author",
+        "extension": "epub",
+        "filesize": 48213,
+        "year": "2026",
+        "language": "Chinese",
+        "palette": [(92, 74, 168), (206, 126, 52), (40, 110, 140)],
+    },
+    {
+        "id": "zl-2",
+        "hash": "def456",
+        "title": "Z-Library 测试 PDF",
+        "author": "Test Author",
+        "extension": "pdf",
+        "filesize": 35120,
+        "year": "2025",
+        "language": "English",
+        "palette": [(196, 64, 82), (46, 134, 171), (63, 167, 106)],
+    },
+]
+
 KOOBONE_VOLUMES = [
     {
         "vol_name": "Koobone Vol 2",
@@ -164,6 +191,29 @@ def koobone_epub(volume):
     if md5 not in KOOBONE_EPUBS:
         KOOBONE_EPUBS[md5] = build_epub(volume)
     return KOOBONE_EPUBS[md5]
+
+
+ZLIBRARY_FILES = {}
+
+
+def zlibrary_file(book):
+    key = f"{book['id']}.{book['extension']}"
+    if key in ZLIBRARY_FILES:
+        return ZLIBRARY_FILES[key]
+    volume = {
+        "vol_name": book["title"],
+        "pages": 3,
+        "palette": book["palette"],
+    }
+    if book["extension"] == "epub":
+        body = build_epub(volume)
+    else:
+        image = Image.open(io.BytesIO(page_png(book["title"], 1, 3, book["palette"])))
+        buffer = io.BytesIO()
+        image.convert("RGB").save(buffer, "PDF")
+        body = buffer.getvalue()
+    ZLIBRARY_FILES[key] = body
+    return body
 
 
 def build_fixtures():
@@ -371,6 +421,112 @@ class Handler(BaseHTTPRequestHandler):
 
         self._send(404, b"not found", "text/plain")
 
+    # ---------------------------------------------------------------- Z-Library
+    def _serve_zlibrary_get(self):
+        path = urlparse(self.path).path
+        host = self.headers.get("Host") or "127.0.0.1:8088"
+        base = f"http://{host}/zlibrary"
+        if path == "/zlibrary/eapi/user/profile":
+            self._send_json(
+                {"success": 1, "user": {"downloads_today": 1, "downloads_limit": 10}},
+            )
+            return
+        if path.startswith("/zlibrary/eapi/book/") and path.endswith("/file"):
+            relative = path[len("/zlibrary/eapi/book/"):-len("/file")]
+            book_id = relative.split("/")[0]
+            book = next((b for b in ZLIBRARY_BOOKS if b["id"] == book_id), None)
+            if book is None:
+                self._send_json({"success": 0, "error": "book not found"})
+                return
+            self._send_json(
+                {
+                    "success": 1,
+                    "file": {
+                        "allowDownload": 1,
+                        "downloadLink": f"{base}/files/{book['id']}.{book['extension']}",
+                        "description": book["title"],
+                        "author": book["author"],
+                        "extension": book["extension"],
+                    },
+                },
+            )
+            return
+        if path.startswith("/zlibrary/files/"):
+            name = path[len("/zlibrary/files/"):]
+            book = next(
+                (b for b in ZLIBRARY_BOOKS if name == f"{b['id']}.{b['extension']}"),
+                None,
+            )
+            if book is None:
+                self._send(404, b"not found", "text/plain")
+                return
+            content_type = "application/epub+zip" if book["extension"] == "epub" else "application/pdf"
+            self._send(200, zlibrary_file(book), content_type)
+            return
+        if path.startswith("/zlibrary/covers/"):
+            name = path[len("/zlibrary/covers/"):]
+            book = next(
+                (b for b in ZLIBRARY_BOOKS if name == f"{b['id']}.png"),
+                None,
+            )
+            if book is None:
+                self._send(404, b"not found", "text/plain")
+                return
+            self._send(200, page_png(book["title"], 1, 1, book["palette"]), "image/png")
+            return
+        self._send(404, b"not found", "text/plain")
+
+    def _serve_zlibrary_post(self):
+        path = urlparse(self.path).path
+        length = int(self.headers.get("Content-Length", "0") or 0)
+        raw = self.rfile.read(length).decode() if length else ""
+        form = parse_qs(raw)
+        host = self.headers.get("Host") or "127.0.0.1:8088"
+        base = f"http://{host}/zlibrary"
+        if path == "/zlibrary/eapi/user/login":
+            email = (form.get("email") or [""])[0]
+            password = (form.get("password") or [""])[0]
+            if email == ZLIBRARY_EMAIL and password == ZLIBRARY_PASSWORD:
+                self._send_json(
+                    {
+                        "success": 1,
+                        "user": {"id": "1001", "remix_userkey": "mockkey", "name": "Reader"},
+                    },
+                )
+            else:
+                self._send_json({"success": 0, "error": "邮箱或密码错误"})
+            return
+        if path == "/zlibrary/eapi/book/search":
+            query = (form.get("message") or [""])[0].lower()
+            extensions = form.get("extensions[]") or []
+            books = [
+                book for book in ZLIBRARY_BOOKS
+                if (not query or query in book["title"].lower())
+                and (not extensions or book["extension"] in extensions)
+            ]
+            self._send_json(
+                {
+                    "success": 1,
+                    "books": [
+                        {
+                            "id": book["id"],
+                            "hash": book["hash"],
+                            "title": book["title"],
+                            "author": book["author"],
+                            "cover": f"{base}/covers/{book['id']}.png",
+                            "extension": book["extension"],
+                            "filesize": book["filesize"],
+                            "year": book["year"],
+                            "language": book["language"],
+                        }
+                        for book in books
+                    ],
+                    "pagination": {"current": 1, "total_pages": 1},
+                },
+            )
+            return
+        self._send(404, b"not found", "text/plain")
+
     # ---------------------------------------------------------------- WebDAV
     def do_PROPFIND(self):
         length = int(self.headers.get("Content-Length", "0") or 0)
@@ -427,6 +583,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path.startswith("/koobone/"):
             self._serve_koobone()
+            return
+        if path.startswith("/zlibrary/"):
+            self._serve_zlibrary_get()
             return
         self._send(404, b"not found", "text/plain")
 
@@ -556,6 +715,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/koobone/login_do.php":
             self._serve_koobone_login()
             return
+        if path.startswith("/zlibrary/"):
+            self._serve_zlibrary_post()
+            return
         if not path.startswith("/komga/api/v1/"):
             self._send(404, b"not found", "text/plain")
             return
@@ -594,6 +756,7 @@ def main():
     print(f"fixtures: {FIXTURE_ROOT}")
     print(f"WebDAV:   http://127.0.0.1:{port}/dav  (dav / dav)")
     print(f"Komga:    http://127.0.0.1:{port}/komga (X-API-Key: {KOMGA_KEY})")
+    print(f"Z-Library: http://127.0.0.1:{port}/zlibrary (reader@example.com / zlibrary)")
     server.serve_forever()
 
 

@@ -1,5 +1,6 @@
 package com.example.comic.source.komga
 
+import android.content.Context
 import com.example.comic.model.Book
 import com.example.comic.model.Library
 import com.example.comic.model.Page
@@ -7,6 +8,7 @@ import com.example.comic.model.Series
 import com.example.comic.model.SourceConfig
 import com.example.comic.source.ComicSource
 import com.example.comic.source.SourceException
+import com.example.comic.source.remote.AdaptiveBaseUrl
 import com.example.comic.source.remote.appendPath
 import com.example.comic.source.remote.authorize
 import com.example.comic.source.remote.execute
@@ -29,25 +31,44 @@ import java.io.InputStream
 class KomgaSource(
     private val client: OkHttpClient,
     override val config: SourceConfig,
+    context: Context? = null,
 ) : ComicSource {
-    private val base = normalizeBaseUrl(config.baseUrl).appendPath("/api/v1")
+    private val localRoot = normalizeBaseUrl(config.baseUrl)
+    private val publicRoot = config.publicBaseUrl
+        ?.takeIf { it.isNotBlank() }
+        ?.let { normalizeBaseUrl(it) }
+    private val adaptive = AdaptiveBaseUrl(context, client, localRoot, publicRoot) { builder ->
+        val key = config.apiKey?.takeIf { it.isNotBlank() }
+        if (key != null) builder.header("X-API-Key", key) else builder.authorize(config)
+    }
+    private var base = localRoot.appendPath("/api/v1")
     private val json = Json {
         ignoreUnknownKeys = true
     }
 
+    private suspend fun ensureBase() {
+        base = adaptive.resolve().appendPath("/api/v1")
+    }
+
     override suspend fun testConnection() {
+        ensureBase()
         withContext(Dispatchers.IO) {
             val libraries = decode<List<KomgaLibrary>>(request("/libraries"))
             libraries.firstOrNull()?.let { series(it.id) }
         }
     }
 
-    override suspend fun libraries(): List<Library> = withContext(Dispatchers.IO) {
+    override suspend fun libraries(): List<Library> {
+        ensureBase()
+        return withContext(Dispatchers.IO) {
         val dto = decode<List<KomgaLibrary>>(request("/libraries"))
         dto.map { Library(id = it.id, sourceId = id, name = it.name.ifBlank { "Komga" }) }
+        }
     }
 
-    override suspend fun series(libraryId: String): List<Series> = withContext(Dispatchers.IO) {
+    override suspend fun series(libraryId: String): List<Series> {
+        ensureBase()
+        return withContext(Dispatchers.IO) {
         val result = mutableListOf<Series>()
         var page = 0
         while (true) {
@@ -66,9 +87,12 @@ class KomgaSource(
             page++
         }
         result
+        }
     }
 
-    override suspend fun books(seriesId: String): List<Book> = withContext(Dispatchers.IO) {
+    override suspend fun books(seriesId: String): List<Book> {
+        ensureBase()
+        return withContext(Dispatchers.IO) {
         val result = mutableListOf<Book>()
         var page = 0
         while (true) {
@@ -88,9 +112,12 @@ class KomgaSource(
             page++
         }
         result
+        }
     }
 
-    override suspend fun pages(book: Book): List<Page> = withContext(Dispatchers.IO) {
+    override suspend fun pages(book: Book): List<Page> {
+        ensureBase()
+        return withContext(Dispatchers.IO) {
         val dto = decode<List<KomgaPageEntry>>(request("/books/${book.id}/pages"))
         dto.sortedBy { it.number }.mapIndexed { index, page ->
             Page(
@@ -101,9 +128,12 @@ class KomgaSource(
                 mimeType = page.mediaType,
             )
         }
+        }
     }
 
-    override suspend fun openPage(page: Page): InputStream = withContext(Dispatchers.IO) {
+    override suspend fun openPage(page: Page): InputStream {
+        ensureBase()
+        return withContext(Dispatchers.IO) {
         val builder = Request.Builder().url(url("/books/${page.bookId}/pages/${page.key}")).get()
         builder.auth()
         val response = client.execute(builder.build())
@@ -115,9 +145,12 @@ class KomgaSource(
             response.close()
             throw SourceException("页面内容为空")
         }
+        }
     }
 
-    override suspend fun openCover(series: Series): InputStream? = withContext(Dispatchers.IO) {
+    override suspend fun openCover(series: Series): InputStream? {
+        ensureBase()
+        return withContext(Dispatchers.IO) {
         val builder = Request.Builder().url(url("/series/${series.id}/thumbnail")).get()
         builder.auth()
         val response = client.execute(builder.build())
@@ -129,9 +162,11 @@ class KomgaSource(
             response.close()
             null
         }
+        }
     }
 
-    override suspend fun updateProgress(book: Book, page: Int, totalPages: Int, completed: Boolean) =
+    override suspend fun updateProgress(book: Book, page: Int, totalPages: Int, completed: Boolean) {
+        ensureBase()
         withContext(Dispatchers.IO) {
             val payload = json.encodeToString(
                 ReadProgressUpdate(
@@ -150,6 +185,7 @@ class KomgaSource(
                 }
             }
         }
+    }
 
     private fun url(path: String, query: Map<String, String> = emptyMap()): HttpUrl {
         val builder = base.newBuilder().addPathSegments(path.trim('/'))

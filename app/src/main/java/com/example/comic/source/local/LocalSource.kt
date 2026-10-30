@@ -10,7 +10,9 @@ import com.example.comic.model.Series
 import com.example.comic.model.SourceConfig
 import com.example.comic.source.ComicSource
 import com.example.comic.source.SourceException
+import com.example.comic.source.epub.EpubArchive
 import com.example.comic.util.isArchiveName
+import com.example.comic.util.isEpubName
 import com.example.comic.util.isImageName
 import com.example.comic.util.mimeForName
 import com.example.comic.util.naturalCompare
@@ -67,28 +69,35 @@ class LocalSource(
             }
             .toMutableList()
 
-        val looseArchives = children.count { it.isFile && isArchiveName(it.name) }
-        if (looseArchives > 0) {
-            result += Series(
-                id = SINGLES_ID,
-                sourceId = id,
-                libraryId = libraryId,
-                title = "单本",
-                bookCount = looseArchives,
-            )
-        }
+        children
+            .filter { it.isFile && isBookName(it.name) }
+            .forEach { file ->
+                result += Series(
+                    id = file.uri.toString(),
+                    sourceId = id,
+                    libraryId = libraryId,
+                    title = file.name
+                        ?.let(::titleWithoutExtension)
+                        ?.ifBlank { "未命名" }
+                        ?: "未命名",
+                    bookCount = 1,
+                )
+            }
         result
     }
 
     override suspend fun books(seriesId: String): List<Book> = withContext(Dispatchers.IO) {
         if (seriesId == SINGLES_ID) {
             return@withContext requireRoot().listFiles()
-                .filter { it.isFile && isArchiveName(it.name) }
+                .filter { it.isFile && isBookName(it.name) }
                 .sortedWith { a, b -> naturalCompare(a.name.orEmpty(), b.name.orEmpty()) }
                 .map { archive -> archive.toArchiveBook(seriesId) }
         }
 
         val directory = resolve(seriesId)
+        if (directory.isFile && isBookName(directory.name)) {
+            return@withContext listOf(directory.toArchiveBook(seriesId))
+        }
         if (!directory.isDirectory) {
             throw SourceException("系列目录不存在")
         }
@@ -108,7 +117,7 @@ class LocalSource(
         }
 
         children
-            .filter { it.isFile && isArchiveName(it.name) }
+            .filter { it.isFile && isBookName(it.name) }
             .forEach { archive -> books += archive.toArchiveBook(seriesId) }
 
         children
@@ -144,15 +153,19 @@ class LocalSource(
                 }
             }
 
-            document.isFile && isArchiveName(document.name) -> {
-                val entries = listZipImages(document.uri)
+            document.isFile && isBookName(document.name) -> {
+                val entries = if (isEpubName(document.name)) {
+                    withZip(document.uri) { zip -> EpubArchive.pageEntries(zip) }
+                } else {
+                    listZipImages(document.uri).map { it.name }
+                }
                 entries.mapIndexed { index, entry ->
                     Page(
                         sourceId = id,
                         bookId = book.id,
                         index = index,
-                        key = entry.name,
-                        mimeType = mimeForName(entry.name),
+                        key = entry,
+                        mimeType = mimeForName(entry),
                     )
                 }
             }
@@ -208,12 +221,15 @@ class LocalSource(
     private fun countBooks(directory: DocumentFile): Int {
         val children = directory.listFiles()
         val directImages = children.any { it.isFile && isImageName(it.name) }
-        val archives = children.count { it.isFile && isArchiveName(it.name) }
+        val archives = children.count { it.isFile && isBookName(it.name) }
         val imageFolders = children.count { child ->
             child.isDirectory && child.listFiles().any { it.isFile && isImageName(it.name) }
         }
         return archives + imageFolders + if (directImages) 1 else 0
     }
+
+    private fun isBookName(name: String?): Boolean =
+        isArchiveName(name) || isEpubName(name)
 
     private fun DocumentFile.toArchiveBook(seriesId: String): Book = Book(
         id = uri.toString(),
@@ -224,32 +240,26 @@ class LocalSource(
         updatedAt = lastModified().takeIf { it > 0 },
     )
 
-    private fun listZipImages(uri: Uri): List<ZipArchiveEntry> {
+    private fun <T> withZip(uri: Uri, block: (ZipFile) -> T): T {
         val descriptor = resolver.openFileDescriptor(uri, "r")
-            ?: throw SourceException("无法打开压缩包")
+            ?: throw SourceException("无法打开漫画文件")
         return descriptor.use { pfd ->
             FileInputStream(pfd.fileDescriptor).use { input ->
-                ZipFile(input.channel).use { zip ->
-                    Collections.list(zip.entries)
-                        .filter { !it.isDirectory && isImageName(it.name) }
-                        .sortedWith { a, b -> naturalCompare(a.name, b.name) }
-                }
+                ZipFile(input.channel).use(block)
             }
         }
     }
 
-    private fun readZipEntry(uri: Uri, entryName: String): ByteArray {
-        val descriptor = resolver.openFileDescriptor(uri, "r")
-            ?: throw SourceException("无法打开压缩包")
-        return descriptor.use { pfd ->
-            FileInputStream(pfd.fileDescriptor).use { input ->
-                ZipFile(input.channel).use { zip ->
-                    val entry = zip.getEntry(entryName)
-                        ?: throw SourceException("压缩包中找不到页面：$entryName")
-                    zip.getInputStream(entry).use { it.readBytes() }
-                }
-            }
-        }
+    private fun listZipImages(uri: Uri): List<ZipArchiveEntry> = withZip(uri) { zip ->
+        Collections.list(zip.entries)
+            .filter { !it.isDirectory && isImageName(it.name) }
+            .sortedWith { a, b -> naturalCompare(a.name, b.name) }
+    }
+
+    private fun readZipEntry(uri: Uri, entryName: String): ByteArray = withZip(uri) { zip ->
+        val entry = zip.getEntry(entryName)
+            ?: throw SourceException("压缩包中找不到页面：$entryName")
+        zip.getInputStream(entry).use { it.readBytes() }
     }
 
     private fun isHidden(name: String?): Boolean = name.isNullOrBlank() || name.startsWith(".")

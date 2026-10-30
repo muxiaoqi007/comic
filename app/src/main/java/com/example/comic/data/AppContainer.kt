@@ -20,6 +20,7 @@ class AppContainer(context: Context) {
     val readingSettings: ReadingSettingsStore = ReadingSettingsStore(this.context)
     val downloadStore: DownloadStore = DownloadStore(this.context)
     val sourceTestStore: SourceTestStore = SourceTestStore(this.context)
+    val shelfCacheStore: ShelfCacheStore = ShelfCacheStore(this.context)
     val repository: SourceRepository = SourceRepository(
         context = this.context,
         client = httpClient,
@@ -27,7 +28,10 @@ class AppContainer(context: Context) {
         progressStore = progressStore,
         downloadStore = downloadStore,
         sourceTestStore = sourceTestStore,
+        shelfCacheStore = shelfCacheStore,
     )
-    val imageLoader: ImageLoader = ImageLoader(repository)
+    val imageLoader: ImageLoader = ImageLoader(repository, this.context)
     val downloadManager: DownloadManager = DownloadManager(repository, downloadStore, this.context)
+    val zlibraryDownloads: ZlibraryDownloadManager =
+        ZlibraryDownloadManager(repository, downloadStore, this.context)
 }

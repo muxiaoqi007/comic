@@ -44,6 +44,9 @@ class DownloadStore(context: Context) {
     fun coverFile(sourceId: String, bookId: String): File =
         File(sourceDir(sourceId), "${safeName(bookId)}.jpg")
 
+    fun bookFile(sourceId: String, bookId: String, extension: String): File =
+        File(sourceDir(sourceId), "${safeName(bookId)}.${safeName(extension)}")
+
     fun add(record: DownloadRecord) {
         synchronized(lock) {
             val updated = listOf(record) + _items.value.filterNot {

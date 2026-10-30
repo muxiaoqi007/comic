@@ -44,7 +44,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
@@ -59,6 +59,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.example.comic.data.DownloadManager
 import com.example.comic.model.DownloadRecord
+import com.example.comic.model.SourceType
 import com.example.comic.ui.LocalContainer
 import com.example.comic.ui.components.EmptyState
 import com.example.comic.ui.components.formatSize
@@ -117,8 +118,8 @@ fun DownloadsScreen(onOpen: (DownloadRecord) -> Unit) {
         val activeItems = active.values.sortedBy { it.title }
         if (downloads.isEmpty() && activeItems.isEmpty()) {
             EmptyState(
-                title = "还没有下载的漫画",
-                description = "在支持下载的漫画源里打开系列，点击书籍右侧的下载按钮即可离线阅读。",
+                title = "还没有下载的内容",
+                description = "漫画可在系列页下载；Z-Library 的 EPUB/PDF 可在在线书库里下载后用外部应用打开。",
                 modifier = Modifier.padding(padding),
             )
         } else {
@@ -164,9 +165,9 @@ fun DownloadsScreen(onOpen: (DownloadRecord) -> Unit) {
             text = {
                 Text(
                     if (record.contentUri != null) {
-                        "确定删除「${record.title}」吗？会同时删除 Download/Comic 中的 EPUB 文件，且不可恢复。阅读进度会保留。"
+                        "确定删除「${record.title}」吗？会同时删除 Download/Comic 中的文件，且不可恢复。"
                     } else {
-                        "确定删除「${record.title}」的本地文件吗？阅读进度会保留。"
+                        "确定删除「${record.title}」的本地文件吗？不可恢复。"
                     },
                 )
             },
@@ -286,8 +287,9 @@ private fun DownloadRow(
     onDelete: () -> Unit,
 ) {
     val loader = LocalContainer.current.imageLoader
-    val cover by produceState<Bitmap?>(initialValue = null, record.coverPath) {
-        value = record.coverPath?.let { runCatching { loader.loadLocalCover(it) }.getOrNull() }
+    var cover by remember(record.coverPath) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(record.coverPath) {
+        cover = record.coverPath?.let { runCatching { loader.loadLocalCover(it) }.getOrNull() }
     }
 
     Surface(
@@ -344,6 +346,15 @@ private fun DownloadRow(
                 }
                 Spacer(Modifier.height(4.dp))
                 val details = buildList {
+                    if (record.sourceType == SourceType.ZLIBRARY) {
+                        add(
+                            when (record.mimeType) {
+                                "application/pdf" -> "PDF"
+                                "application/epub+zip" -> "EPUB"
+                                else -> "文件"
+                            },
+                        )
+                    }
                     record.pageCount?.takeIf { it > 0 }?.let { add("$it 页") }
                     formatSize(record.sizeBytes)?.let { add(it) }
                     if (record.contentUri != null) add("Download/Comic")

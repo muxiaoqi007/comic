@@ -8,6 +8,7 @@ enum class SourceType {
     WEBDAV,
     KOMGA,
     KOOBONE,
+    ZLIBRARY,
 }
 
 @Serializable
@@ -17,10 +18,12 @@ data class SourceConfig(
     val name: String,
     val treeUri: String? = null,
     val baseUrl: String? = null,
+    val publicBaseUrl: String? = null,
     val rootPath: String = "",
     val username: String? = null,
     val password: String? = null,
     val apiKey: String? = null,
+    val enabled: Boolean = true,
 )
 
 data class Library(
@@ -29,6 +32,7 @@ data class Library(
     val name: String,
 )
 
+@Serializable
 data class Series(
     val id: String,
     val sourceId: String,

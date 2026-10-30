@@ -1,5 +1,6 @@
 package com.example.comic.source.webdav
 
+import android.content.Context
 import android.util.Xml
 import com.example.comic.model.Book
 import com.example.comic.model.Library
@@ -8,6 +9,7 @@ import com.example.comic.model.Series
 import com.example.comic.model.SourceConfig
 import com.example.comic.source.ComicSource
 import com.example.comic.source.SourceException
+import com.example.comic.source.remote.AdaptiveBaseUrl
 import com.example.comic.source.remote.appendPath
 import com.example.comic.source.remote.authorize
 import com.example.comic.source.remote.execute
@@ -35,11 +37,26 @@ import java.nio.channels.SeekableByteChannel
 class WebDavSource(
     private val client: OkHttpClient,
     override val config: SourceConfig,
+    context: Context? = null,
 ) : ComicSource {
-    private val base = normalizeBaseUrl(config.baseUrl)
-    private val root: HttpUrl = base.appendPath(config.rootPath)
+    private val localRoot = normalizeBaseUrl(config.baseUrl).appendPath(config.rootPath)
+    private val publicRoot = config.publicBaseUrl
+        ?.takeIf { it.isNotBlank() }
+        ?.let { normalizeBaseUrl(it).appendPath(config.rootPath) }
+    private val adaptive = AdaptiveBaseUrl(context, client, localRoot, publicRoot) {
+        it.authorize(config)
+    }
+    private var base: HttpUrl = localRoot
+    private var root: HttpUrl = localRoot
+
+    private suspend fun ensureBase() {
+        val selected = adaptive.resolve()
+        base = selected
+        root = selected
+    }
 
     override suspend fun testConnection() {
+        ensureBase()
         withContext(Dispatchers.IO) { propfind(root, depth = "0") }
     }
 
@@ -47,7 +64,9 @@ class WebDavSource(
         listOf(Library(id = ROOT_LIBRARY_ID, sourceId = id, name = config.name))
     }
 
-    override suspend fun series(libraryId: String): List<Series> = withContext(Dispatchers.IO) {
+    override suspend fun series(libraryId: String): List<Series> {
+        ensureBase()
+        return withContext(Dispatchers.IO) {
         val entries = propfind(root, depth = "1").filterNot { it.isSelf(root) }
         val directories = entries
             .filter { it.isCollection }
@@ -73,9 +92,12 @@ class WebDavSource(
         } else {
             directories
         }
+        }
     }
 
-    override suspend fun books(seriesId: String): List<Book> = withContext(Dispatchers.IO) {
+    override suspend fun books(seriesId: String): List<Book> {
+        ensureBase()
+        return withContext(Dispatchers.IO) {
         val directory = if (seriesId == SINGLES_ID) root else parseHref(seriesId)
         val entries = propfind(directory, depth = "1").filterNot { it.isSelf(directory) }
         val books = entries.mapNotNull { entry ->
@@ -100,9 +122,12 @@ class WebDavSource(
             }
         }
         books.sortedWith { a, b -> naturalCompare(a.title, b.title) }
+        }
     }
 
-    override suspend fun pages(book: Book): List<Page> = withContext(Dispatchers.IO) {
+    override suspend fun pages(book: Book): List<Page> {
+        ensureBase()
+        return withContext(Dispatchers.IO) {
         val url = parseHref(book.id)
         if (isArchiveName(url.encodedPath)) {
             withZip(book) { zip ->
@@ -134,11 +159,15 @@ class WebDavSource(
                     )
                 }
         }
+        }
     }
 
-    override suspend fun openPage(page: Page): InputStream = withContext(Dispatchers.IO) {
-        if (page.key.startsWith("http://") || page.key.startsWith("https://")) {
-            val request = Request.Builder().url(page.key).get()
+    override suspend fun openPage(page: Page): InputStream {
+        ensureBase()
+        return withContext(Dispatchers.IO) {
+        val bookUrl = parseHref(page.bookId)
+        if (!isArchiveName(bookUrl.encodedPath)) {
+            val request = Request.Builder().url(parseHref(page.key)).get()
             request.authorize(config)
             val response = client.execute(request.build())
             if (!response.isSuccessful) {
@@ -162,6 +191,7 @@ class WebDavSource(
             zip.getInputStream(entry).use { it.readBytes() }
         }
         ByteArrayInputStream(bytes)
+        }
     }
 
     override suspend fun openCover(series: Series): InputStream? = withContext(Dispatchers.IO) {
@@ -221,7 +251,7 @@ class WebDavSource(
                 XmlPullParser.END_TAG -> if (parser.name.equals("response", ignoreCase = true)) {
                     val rawHref = href
                     if (!rawHref.isNullOrBlank()) {
-                        val resolved = context.resolve(rawHref)
+                        val resolved = resolveWebDavHref(base, rawHref, context)
                         if (resolved != null) {
                             val fallbackName = resolved.pathSegments.lastOrNull { it.isNotBlank() }.orEmpty()
                             entries += DavEntry(
@@ -280,8 +310,8 @@ class WebDavSource(
     }
 
     private fun parseHref(value: String): HttpUrl =
-        base.resolve(value)
-            ?: throw SourceException("无效的远端地址：$value")
+        resolveWebDavHref(base, value)
+            ?: throw SourceException("无效或跨源的远端地址：$value")
 
     private fun DavEntry.isSelf(url: HttpUrl): Boolean = href.trimEnd('/') == url.toString().trimEnd('/')
 
@@ -308,6 +338,12 @@ class WebDavSource(
             </d:propfind>"""
     }
 }
+
+// HttpUrl canonicalizes schemes, hosts and effective ports before comparison.
+internal fun resolveWebDavHref(base: HttpUrl, value: String, context: HttpUrl = base): HttpUrl? =
+    context.resolve(value)?.takeIf {
+        it.scheme == base.scheme && it.host == base.host && it.port == base.port
+    }
 
 private fun parseHttpDate(value: String): Long? {
     val formats = listOf(

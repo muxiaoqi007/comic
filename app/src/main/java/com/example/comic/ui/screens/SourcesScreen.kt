@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -35,22 +36,26 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Dns
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.FolderOpen
+import androidx.compose.material.icons.outlined.LibraryBooks
 import androidx.compose.material.icons.outlined.MenuBook
+import androidx.compose.material.icons.outlined.MoreVert
 import androidx.compose.material.icons.outlined.Refresh
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.MenuDefaults
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -63,13 +68,18 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation as ComposePassword
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.documentfile.provider.DocumentFile
@@ -81,6 +91,7 @@ import com.example.comic.ui.LocalContainer
 import com.example.comic.ui.components.EmptyState
 import com.example.comic.ui.components.SourceTypeBadge
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.ensureActive
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -88,7 +99,7 @@ import java.util.UUID
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun SourcesScreen() {
+fun SourcesScreen(onOpenZlibrary: (SourceConfig) -> Unit = {}) {
     val container = LocalContainer.current
     val context = LocalContext.current
     val versionName = remember {
@@ -112,8 +123,14 @@ fun SourcesScreen() {
         if (testingId != null) return
         testingId = config.id
         scope.launch {
-            val result = runCatching { repository.testConnection(config) }
-            testingId = null
+            val result = try {
+                runCatching { repository.testConnection(config) }.also {
+                    kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                }
+            } finally {
+                testingId = null
+            }
+            if (repository.sources.value.none { it == config }) return@launch
             val message = result.fold(
                 onSuccess = { "成功" },
                 onFailure = { (it.message ?: "连接失败").take(80) },
@@ -133,9 +150,18 @@ fun SourcesScreen() {
             TopAppBar(
                 title = {
                     Column {
-                        Text("源管理", fontWeight = FontWeight.SemiBold)
                         Text(
-                            text = "v${versionName ?: "?"}",
+                            text = "源管理",
+                            fontFamily = FontFamily.Serif,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 28.sp,
+                        )
+                        Text(
+                            text = if (sources.isEmpty()) {
+                                "v${versionName ?: "?"}"
+                            } else {
+                                "${sources.count { it.enabled }}/${sources.size} 个源启用 · v${versionName ?: "?"}"
+                            },
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -144,20 +170,22 @@ fun SourcesScreen() {
             )
         },
         floatingActionButton = {
-            ExtendedFloatingActionButton(
-                onClick = { showAdd = true },
-                containerColor = MaterialTheme.colorScheme.primary,
-                contentColor = MaterialTheme.colorScheme.onPrimary,
-                icon = { Icon(Icons.Outlined.Add, contentDescription = null) },
-                text = { Text("添加源") },
-            )
+            if (sources.isNotEmpty()) {
+                ExtendedFloatingActionButton(
+                    onClick = { showAdd = true },
+                    containerColor = MaterialTheme.colorScheme.primaryContainer,
+                    contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+                    icon = { Icon(Icons.Outlined.Add, contentDescription = null) },
+                    text = { Text("添加源") },
+                )
+            }
         },
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
         if (sources.isEmpty()) {
             EmptyState(
                 title = "还没有漫画源",
-                description = "支持本地文件夹、NAS 上的 WebDAV 目录、Komga 服务器，以及 Koobone 账号。",
+                description = "支持本地文件夹、NAS 上的 WebDAV 目录、Komga 服务器、Koobone 账号，以及 Z-Library 个人账号下载。",
                 modifier = Modifier.padding(padding),
                 actionLabel = "添加漫画源",
                 onAction = { showAdd = true },
@@ -167,8 +195,8 @@ fun SourcesScreen() {
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(padding),
-                contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 96.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
+                contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 8.dp, bottom = 96.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
                 items(sources, key = { it.id }) { source ->
                     SourceCard(
@@ -178,6 +206,10 @@ fun SourcesScreen() {
                         onTest = { test(source) },
                         onEdit = { editing = source },
                         onDelete = { pendingDelete = source },
+                        onToggleEnabled = { enabled ->
+                            repository.setSourceEnabled(source.id, enabled)
+                        },
+                        onOpenLibrary = { onOpenZlibrary(source) },
                     )
                 }
             }
@@ -244,81 +276,196 @@ private fun SourceCard(
     onTest: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
+    onToggleEnabled: (Boolean) -> Unit,
+    onOpenLibrary: () -> Unit,
 ) {
-    Card(
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+    var menuOpen by remember { mutableStateOf(false) }
+    val accent = MaterialTheme.colorScheme.primary
+    val contentAlpha = if (source.enabled) 1f else 0.48f
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(14.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.32f)),
     ) {
-        Column(Modifier.padding(16.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(
-                    text = source.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.weight(1f),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                SourceTypeBadge(source.type)
-            }
-            Spacer(Modifier.height(6.dp))
-            Text(
-                text = source.locationLabel(),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Spacer(Modifier.height(5.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(
-                    modifier = Modifier
-                        .size(6.dp)
-                        .clip(CircleShape)
-                        .background(
-                            when {
-                                testResult == null -> MaterialTheme.colorScheme.outline
-                                testResult.ok -> Color(0xFF3F8F62)
-                                else -> MaterialTheme.colorScheme.error
-                            },
-                        ),
-                )
-                Spacer(Modifier.width(6.dp))
-                Text(
-                    text = testResult?.let {
-                        "上次测试：${it.message} · ${relativeTime(it.testedAt)}"
-                    } ?: "尚未测试",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+        Row(
+            modifier = Modifier.padding(start = 13.dp, top = 12.dp, bottom = 8.dp, end = 2.dp),
+            verticalAlignment = Alignment.Top,
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(38.dp)
+                    .alpha(contentAlpha)
+                    .clip(RoundedCornerShape(11.dp))
+                    .background(accent.copy(alpha = 0.11f)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = sourceIcon(source.type),
+                    contentDescription = null,
+                    tint = accent,
+                    modifier = Modifier.size(19.dp),
                 )
             }
-            Spacer(Modifier.height(6.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                TextButton(onClick = onTest, enabled = !testing) {
-                    if (testing) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.width(8.dp))
-                        Text("测试中…")
-                    } else {
-                        Icon(Icons.Outlined.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                        Spacer(Modifier.width(6.dp))
-                        Text("测试连接")
-                    }
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        text = source.name,
+                        style = MaterialTheme.typography.titleSmall,
+                        modifier = Modifier.weight(1f).alpha(contentAlpha),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Box(Modifier.alpha(contentAlpha)) { SourceTypeBadge(source.type) }
                 }
-                Spacer(Modifier.weight(1f))
-                IconButton(onClick = onEdit) {
+                Spacer(Modifier.height(3.dp))
+                Text(
+                    text = source.locationLabel(),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.alpha(contentAlpha),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(Modifier.height(2.dp))
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (!source.enabled) {
+                            Box(
+                                modifier = Modifier
+                                    .size(5.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.outline),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = "已停用 · 不会在书架加载",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        } else if (testing) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(11.dp),
+                                strokeWidth = 1.5.dp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = "正在测试…",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        } else {
+                            Box(
+                                modifier = Modifier
+                                    .size(5.dp)
+                                    .clip(CircleShape)
+                                    .background(
+                                        when {
+                                            testResult == null -> MaterialTheme.colorScheme.outline
+                                            testResult.ok -> Color(0xFF3F8F62)
+                                            else -> MaterialTheme.colorScheme.error
+                                        },
+                                    ),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = when {
+                                    testResult == null -> "尚未测试"
+                                    testResult.ok -> "连接正常 · ${relativeTime(testResult.testedAt)}"
+                                    else -> "连接失败 · ${testResult.message.take(36)}"
+                                },
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                    if (source.type == SourceType.ZLIBRARY) {
+                        TextButton(
+                            onClick = onOpenLibrary,
+                            enabled = source.enabled,
+                            contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp),
+                            modifier = Modifier.height(32.dp),
+                        ) {
+                            Text("书库", style = MaterialTheme.typography.labelMedium)
+                        }
+                    }
+                    Switch(
+                        checked = source.enabled,
+                        onCheckedChange = onToggleEnabled,
+                        modifier = Modifier.semantics {
+                            contentDescription = "${source.name} 源开关"
+                        },
+                    )
+                }
+            }
+            Box {
+                IconButton(onClick = { menuOpen = true }) {
                     Icon(
-                        Icons.Outlined.Edit,
-                        contentDescription = "编辑",
+                        Icons.Outlined.MoreVert,
+                        contentDescription = "更多操作",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
-                IconButton(onClick = onDelete) {
-                    Icon(Icons.Outlined.Delete, contentDescription = "删除", tint = MaterialTheme.colorScheme.error)
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text(if (testing) "正在测试…" else "测试连接") },
+                        leadingIcon = { Icon(Icons.Outlined.Refresh, contentDescription = null) },
+                        enabled = !testing && source.enabled,
+                        onClick = {
+                            menuOpen = false
+                            onTest()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("编辑") },
+                        leadingIcon = { Icon(Icons.Outlined.Edit, contentDescription = null) },
+                        onClick = {
+                            menuOpen = false
+                            onEdit()
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("删除", color = MaterialTheme.colorScheme.error) },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Outlined.Delete,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.error,
+                            )
+                        },
+                        colors = MenuDefaults.itemColors(
+                            textColor = MaterialTheme.colorScheme.error,
+                            leadingIconColor = MaterialTheme.colorScheme.error,
+                        ),
+                        onClick = {
+                            menuOpen = false
+                            onDelete()
+                        },
+                    )
                 }
             }
         }
     }
+}
+
+private fun sourceIcon(type: SourceType) = when (type) {
+    SourceType.LOCAL -> Icons.Outlined.FolderOpen
+    SourceType.WEBDAV -> Icons.Outlined.Cloud
+    SourceType.KOMGA -> Icons.Outlined.Dns
+    SourceType.KOOBONE -> Icons.Outlined.MenuBook
+    SourceType.ZLIBRARY -> Icons.Outlined.LibraryBooks
 }
 
 private data class SourceTestResult(val ok: Boolean, val message: String)
@@ -339,10 +486,22 @@ private fun SourceConfig.locationLabel(): String = when (type) {
         ?.let { runCatching { Uri.parse(it).lastPathSegment }.getOrNull() }
         ?: "未选择文件夹"
 
-    SourceType.WEBDAV -> listOfNotNull(baseUrl, rootPath.takeIf { it.isNotBlank() }).joinToString(" / ")
-    SourceType.KOMGA -> baseUrl.orEmpty()
+    SourceType.WEBDAV -> buildString {
+        append(listOfNotNull(baseUrl, rootPath.takeIf { it.isNotBlank() }).joinToString(" / "))
+        if (!publicBaseUrl.isNullOrBlank()) append(" · 公网备用")
+    }
+
+    SourceType.KOMGA -> buildString {
+        append(baseUrl.orEmpty())
+        if (!publicBaseUrl.isNullOrBlank()) append(" · 公网备用")
+    }
     SourceType.KOOBONE -> listOfNotNull(
         baseUrl?.takeIf { it.isNotBlank() } ?: "https://koobone.com",
+        username?.takeIf { it.isNotBlank() },
+    ).joinToString(" · ")
+
+    SourceType.ZLIBRARY -> listOfNotNull(
+        baseUrl?.takeIf { it.isNotBlank() },
         username?.takeIf { it.isNotBlank() },
     ).joinToString(" · ")
 }
@@ -369,6 +528,7 @@ private fun AddSourceDialog(
         )
     }
     var baseUrl by remember { mutableStateOf(initial?.baseUrl.orEmpty()) }
+    var publicBaseUrl by remember { mutableStateOf(initial?.publicBaseUrl.orEmpty()) }
     var rootPath by remember { mutableStateOf(initial?.rootPath.orEmpty()) }
     var username by remember { mutableStateOf(initial?.username.orEmpty()) }
     var password by remember { mutableStateOf(initial?.password.orEmpty()) }
@@ -389,10 +549,12 @@ private fun AddSourceDialog(
             } else {
                 baseUrl.trim().ifBlank { null }
             },
+            publicBaseUrl = publicBaseUrl.trim().ifBlank { null },
             rootPath = rootPath.trim(),
             username = username.trim().ifBlank { null },
             password = password.ifBlank { null },
             apiKey = apiKey.trim().ifBlank { null },
+            enabled = initial?.enabled ?: true,
         )
     }
 
@@ -433,7 +595,7 @@ private fun AddSourceDialog(
                     SourceTypeOption(
                         icon = { Icon(Icons.Outlined.FolderOpen, contentDescription = null) },
                         title = "本地文件夹",
-                        subtitle = "授权一个目录，支持 CBZ/ZIP 压缩包和图片文件夹",
+                        subtitle = "授权一个目录，支持 CBZ/ZIP、EPUB 和图片文件夹",
                         onClick = {
                             type = SourceType.LOCAL
                             if (name.isBlank()) name = "本地漫画"
@@ -470,6 +632,16 @@ private fun AddSourceDialog(
                             if (baseUrl.isBlank()) baseUrl = "https://koobone.com"
                         },
                     )
+                    Spacer(Modifier.height(10.dp))
+                    SourceTypeOption(
+                        icon = { Icon(Icons.Outlined.LibraryBooks, contentDescription = null) },
+                        title = "Z-Library",
+                        subtitle = "个人账号搜索并下载 EPUB/PDF，阅读交给外部应用",
+                        onClick = {
+                            type = SourceType.ZLIBRARY
+                            if (name.isBlank()) name = "Z-Library"
+                        },
+                    )
                     Spacer(Modifier.height(12.dp))
                     TextButton(onClick = onDismiss, modifier = Modifier.align(Alignment.End)) {
                         Text("取消")
@@ -495,6 +667,7 @@ private fun AddSourceDialog(
                                         SourceType.WEBDAV -> "WebDAV"
                                         SourceType.KOMGA -> "Komga"
                                         SourceType.KOOBONE -> "Koobone"
+                                        SourceType.ZLIBRARY -> "Z-Library"
                                     },
                                 )
                             },
@@ -529,7 +702,7 @@ private fun AddSourceDialog(
                                 Text(if (treeUri == null) "选择文件夹" else "重新选择")
                             }
                             Text(
-                                text = "授权后 App 会持久保存读取权限。目录第一层会被识别为系列。",
+                                text = "授权后 App 会持久保存读取权限。目录第一层会被识别为系列，散放的 CBZ/ZIP、EPUB 各自作为一本。",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -539,11 +712,27 @@ private fun AddSourceDialog(
                             OutlinedTextField(
                                 value = baseUrl,
                                 onValueChange = { baseUrl = it },
-                                label = { Text("服务器地址") },
+                                label = { Text("内网地址") },
                                 placeholder = { Text("https://nas.local:5006") },
                                 singleLine = true,
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                                 modifier = Modifier.fillMaxWidth(),
+                            )
+                            Spacer(Modifier.height(10.dp))
+                            OutlinedTextField(
+                                value = publicBaseUrl,
+                                onValueChange = { publicBaseUrl = it },
+                                label = { Text("公网地址（可选）") },
+                                placeholder = { Text("https://nas.example.com:5006") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                text = "在家优先走内网；离开 Wi-Fi 或内网不可达时自动切公网。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                             Spacer(Modifier.height(10.dp))
                             OutlinedTextField(
@@ -567,11 +756,27 @@ private fun AddSourceDialog(
                             OutlinedTextField(
                                 value = baseUrl,
                                 onValueChange = { baseUrl = it },
-                                label = { Text("服务器地址") },
+                                label = { Text("内网地址") },
                                 placeholder = { Text("http://192.168.1.10:25600") },
                                 singleLine = true,
                                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                                 modifier = Modifier.fillMaxWidth(),
+                            )
+                            Spacer(Modifier.height(10.dp))
+                            OutlinedTextField(
+                                value = publicBaseUrl,
+                                onValueChange = { publicBaseUrl = it },
+                                label = { Text("公网地址（可选）") },
+                                placeholder = { Text("https://komga.example.com") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                text = "在家优先走内网；离开 Wi-Fi 或内网不可达时自动切公网。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                             Spacer(Modifier.height(10.dp))
                             OutlinedTextField(
@@ -633,6 +838,44 @@ private fun AddSourceDialog(
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
+
+                        SourceType.ZLIBRARY -> {
+                            OutlinedTextField(
+                                value = baseUrl,
+                                onValueChange = { baseUrl = it },
+                                label = { Text("服务器地址") },
+                                placeholder = { Text("https://zh.zlibrary.by") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Spacer(Modifier.height(10.dp))
+                            OutlinedTextField(
+                                value = username,
+                                onValueChange = { username = it },
+                                label = { Text("邮箱") },
+                                placeholder = { Text("name@example.com") },
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Spacer(Modifier.height(10.dp))
+                            OutlinedTextField(
+                                value = password,
+                                onValueChange = { password = it },
+                                label = { Text("密码") },
+                                singleLine = true,
+                                visualTransformation = ComposePassword(),
+                                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                            Spacer(Modifier.height(8.dp))
+                            Text(
+                                text = "仅使用你自己的账号。下载的 EPUB/PDF 保存到 Download/Comic，App 内不提供文字书阅读；域名变化时请更新服务器地址。",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
                     }
 
                     Row(
@@ -646,8 +889,13 @@ private fun AddSourceDialog(
                                 testing = true
                                 inlineResult = null
                                 scope.launch {
-                                    val result = runCatching { onTest(config) }
-                                    testing = false
+                                    val result = try {
+                                        runCatching { onTest(config) }.also {
+                                            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                                        }
+                                    } finally {
+                                        testing = false
+                                    }
                                     inlineResult = SourceTestResult(
                                         ok = result.isSuccess,
                                         message = result.fold(
@@ -771,4 +1019,6 @@ private fun isValid(
     SourceType.LOCAL -> name.isNotBlank() && !treeUri.isNullOrBlank()
     SourceType.WEBDAV, SourceType.KOMGA -> name.isNotBlank() && baseUrl.isNotBlank()
     SourceType.KOOBONE -> name.isNotBlank() && username.isNotBlank() && password.isNotBlank()
+    SourceType.ZLIBRARY -> name.isNotBlank() && baseUrl.isNotBlank() &&
+        username.isNotBlank() && password.isNotBlank()
 }

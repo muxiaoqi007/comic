@@ -15,6 +15,7 @@ data class DownloadRecord(
     val sizeBytes: Long = 0,
     val filePath: String,
     val contentUri: String? = null,
+    val mimeType: String? = null,
     val coverPath: String? = null,
     val downloadedAt: Long,
 )

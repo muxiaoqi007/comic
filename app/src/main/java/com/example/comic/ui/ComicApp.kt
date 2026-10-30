@@ -15,10 +15,13 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavGraph.Companion.findStartDestination
@@ -31,14 +34,18 @@ import androidx.navigation.navArgument
 import com.example.comic.data.AppContainer
 import com.example.comic.model.Book
 import com.example.comic.model.Series
+import com.example.comic.model.SourceType
 import com.example.comic.ui.screens.DownloadsScreen
 import com.example.comic.ui.screens.LibraryScreen
 import com.example.comic.ui.screens.ReaderScreen
 import com.example.comic.ui.screens.SeriesDetailScreen
 import com.example.comic.ui.screens.SourcesScreen
+import com.example.comic.ui.screens.ZlibraryScreen
 import com.example.comic.ui.viewmodel.LibraryViewModel
 import com.example.comic.ui.viewmodel.ReaderViewModel
 import com.example.comic.ui.viewmodel.SeriesDetailViewModel
+import com.example.comic.ui.viewmodel.ZlibraryViewModel
+import android.widget.Toast
 
 private data class TopLevelDestination(
     val route: String,
@@ -50,6 +57,7 @@ private data class TopLevelDestination(
 fun ComicApp(container: AppContainer) {
     CompositionLocalProvider(LocalContainer provides container) {
         val navController = rememberNavController()
+        val context = LocalContext.current
         val destinations = remember {
             listOf(
                 TopLevelDestination(Routes.LIBRARY, "书架", Icons.Outlined.CollectionsBookmark),
@@ -59,6 +67,13 @@ fun ComicApp(container: AppContainer) {
         }
         val backStackEntry by navController.currentBackStackEntryAsState()
         val currentRoute = backStackEntry?.destination?.route
+        val view = LocalView.current
+        val isReading = currentRoute == Routes.READER_PATTERN
+        DisposableEffect(view, isReading) {
+            val previousKeepScreenOn = view.keepScreenOn
+            view.keepScreenOn = isReading
+            onDispose { view.keepScreenOn = previousKeepScreenOn }
+        }
         val showBottomBar = currentRoute == Routes.LIBRARY ||
             currentRoute == Routes.DOWNLOADS ||
             currentRoute == Routes.SOURCES
@@ -108,7 +123,7 @@ fun ComicApp(container: AppContainer) {
             ) {
                 composable(Routes.LIBRARY) {
                     val viewModel: LibraryViewModel = viewModel {
-                        LibraryViewModel(container.repository)
+                        LibraryViewModel(container.repository, container.shelfCacheStore)
                     }
                     LibraryScreen(
                         viewModel = viewModel,
@@ -123,22 +138,55 @@ fun ComicApp(container: AppContainer) {
                 composable(Routes.DOWNLOADS) {
                     DownloadsScreen(
                         onOpen = { record ->
-                            navController.navigate(
-                                Routes.reader(
-                                    Book(
-                                        id = record.bookId,
-                                        sourceId = record.sourceId,
-                                        seriesId = record.seriesId,
-                                        title = record.title,
+                            if (record.sourceType == SourceType.ZLIBRARY) {
+                                if (!openDownloadedFile(context, record)) {
+                                    Toast.makeText(
+                                        context,
+                                        "没有可打开此文件的应用",
+                                        Toast.LENGTH_SHORT,
+                                    ).show()
+                                }
+                            } else {
+                                navController.navigate(
+                                    Routes.reader(
+                                        Book(
+                                            id = record.bookId,
+                                            sourceId = record.sourceId,
+                                            seriesId = record.seriesId,
+                                            title = record.title,
+                                        ),
                                     ),
-                                ),
-                            )
+                                )
+                            }
                         },
                     )
                 }
 
                 composable(Routes.SOURCES) {
-                    SourcesScreen()
+                    SourcesScreen(
+                        onOpenZlibrary = { source ->
+                            navController.navigate(Routes.zlibrary(source.id))
+                        },
+                    )
+                }
+
+                composable(
+                    route = Routes.ZLIBRARY_PATTERN,
+                    arguments = listOf(navArgument("sourceId") { type = NavType.StringType }),
+                ) { entry ->
+                    val sourceId = entry.arguments?.getString("sourceId").orEmpty()
+                    val viewModel: ZlibraryViewModel = viewModel {
+                        ZlibraryViewModel(
+                            repository = container.repository,
+                            store = container.downloadStore,
+                            downloads = container.zlibraryDownloads,
+                            sourceId = sourceId,
+                        )
+                    }
+                    ZlibraryScreen(
+                        viewModel = viewModel,
+                        onBack = { navController.popBackStack() },
+                    )
                 }
 
                 composable(

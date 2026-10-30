@@ -3,22 +3,30 @@ package com.example.comic.ui.viewmodel
 import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.comic.data.CachedShelf
+import com.example.comic.data.ShelfCacheStore
 import com.example.comic.data.SourceRepository
 import com.example.comic.model.Series
+import com.example.comic.model.SourceConfig
 import com.example.comic.model.SourceType
-import com.example.comic.util.compareTitles
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class LibraryViewModel(
     private val repository: SourceRepository,
+    private val shelfCache: ShelfCacheStore,
 ) : ViewModel() {
 
     data class Entry(
@@ -36,36 +44,102 @@ class LibraryViewModel(
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
 
-    private var job: Job? = null
+    private var refreshJob: Job? = null
+    private var refreshGeneration = 0
+    private var cacheSnapshot: Map<String, CachedShelf> = emptyMap()
+
+    init {
+        cacheSnapshot = shelfCache.load()
+        val sources = repository.sources.value
+        _state.value = UiState(
+            loading = sources.any { it.enabled },
+            entries = mergeShelfEntries(sources, emptyMap(), cacheSnapshot),
+        )
+        viewModelScope.launch {
+            repository.sources.collect { configs ->
+                cacheSnapshot = shelfCache.load()
+                syncEntriesWithSources(configs)
+                startRefresh(configs)
+            }
+        }
+    }
 
     fun refresh() {
-        if (job?.isActive == true) return
-        val configs = repository.sources.value
-        job = viewModelScope.launch {
-            _state.value = _state.value.copy(loading = true)
+        startRefresh(repository.sources.value)
+    }
+
+    private fun syncEntriesWithSources(sources: List<SourceConfig>) {
+        _state.update { current ->
+            val visible = current.entries
+                .groupBy { it.series.sourceId }
+                .mapValues { (_, entries) -> entries.map { it.series } }
+            current.copy(entries = mergeShelfEntries(sources, visible, cacheSnapshot))
+        }
+    }
+
+    private fun startRefresh(configs: List<SourceConfig>) {
+        val enabled = configs.filter { it.enabled && it.type != SourceType.ZLIBRARY }
+        val generation = ++refreshGeneration
+        refreshJob?.cancel()
+
+        if (enabled.isEmpty()) {
+            _state.value = UiState(loading = false)
+            return
+        }
+
+        refreshJob = viewModelScope.launch {
+            _state.update { it.copy(loading = true, failures = emptyList()) }
             val results = coroutineScope {
-                configs.map { config ->
-                    async(Dispatchers.IO) {
-                        config to runCatching { repository.seriesForSource(config) }
-                    }
+                enabled.map { config ->
+                    async(Dispatchers.IO) { config to loadSource(config) }
                 }.awaitAll()
             }
-            val entries = results.flatMap { (config, result) ->
-                result.getOrDefault(emptyList()).map { series ->
-                    Entry(series = series, sourceName = config.name, sourceType = config.type)
-                }
-            }.sortedWith { a, b -> compareTitles(a.series.title, b.series.title) }
+            currentCoroutineContext().ensureActive()
+            if (generation != refreshGeneration) return@launch
+
+            val successes = results.mapNotNull { (config, result) ->
+                result.getOrNull()?.let { config to it }
+            }
             val failures = results.mapNotNull { (config, result) ->
                 val error = result.exceptionOrNull() ?: return@mapNotNull null
                 Log.w("ComicLibrary", "加载源「${config.name}」失败", error)
-                val detail = error.message?.takeIf { it.isNotBlank() } ?: "未知错误"
-                "${config.name}：$detail"
+                "${config.name}：${error.message?.takeIf { it.isNotBlank() } ?: "未知错误"}"
             }
+
+            if (successes.isNotEmpty()) {
+                val records = successes.map { (config, series) ->
+                    CachedShelf(
+                        sourceId = config.id,
+                        sourceName = config.name,
+                        sourceType = config.type,
+                        series = series.map { it.copy(description = null) },
+                        savedAt = System.currentTimeMillis(),
+                    )
+                }
+                withContext(Dispatchers.IO) {
+                    shelfCache.update(records)
+                }
+                cacheSnapshot = cacheSnapshot + records.associateBy { it.sourceId }
+            }
+
+            if (generation != refreshGeneration) return@launch
             _state.value = UiState(
                 loading = false,
-                entries = entries,
+                entries = mergeShelfEntries(
+                    enabled,
+                    successes.associate { (config, series) -> config.id to series },
+                    cacheSnapshot,
+                ),
                 failures = failures,
             )
         }
+    }
+
+    private suspend fun loadSource(config: SourceConfig): Result<List<Series>> = try {
+        Result.success(repository.seriesForSource(config))
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        Result.failure(e)
     }
 }

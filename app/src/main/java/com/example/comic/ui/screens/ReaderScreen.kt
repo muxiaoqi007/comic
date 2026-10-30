@@ -59,7 +59,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
@@ -72,6 +71,9 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -202,9 +204,17 @@ private fun ReaderContent(
     }
 
     BackHandler(onBack = ::finish)
-
-    DisposableEffect(Unit) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_PAUSE && !exiting) {
+                viewModel.saveNowBlocking(latestPage.intValue, pages.size)
+                viewModel.saveNow(latestPage.intValue, pages.size)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
             if (!exiting) viewModel.saveNowBlocking(latestPage.intValue, pages.size)
         }
     }
@@ -212,7 +222,7 @@ private fun ReaderContent(
     LaunchedEffect(mode) {
         if (previousMode != mode) {
             val target = if (previousMode == ReadingMode.VERTICAL) {
-                listState.firstVisibleItemIndex
+                verticalPage
             } else {
                 pagerState.currentPage
             }.coerceIn(0, pages.lastIndex)
@@ -569,6 +579,7 @@ private fun ReaderBottomBar(
         )
         Slider(
             value = sliderValue,
+            enabled = total > 1,
             onValueChange = { value ->
                 dragging = true
                 sliderValue = value
@@ -589,9 +600,10 @@ private fun ReaderBottomBar(
 
 @Composable
 private fun ReaderPage(page: Page, loader: ImageLoader) {
-    var attempt by remember(page.key) { mutableIntStateOf(0) }
-    val result by produceState<Result<Bitmap?>?>(initialValue = null, page.key, attempt) {
-        value = runCatching { loader.loadPage(page) }
+    var attempt by remember(page) { mutableIntStateOf(0) }
+    var result by remember(page, attempt) { mutableStateOf<Result<Bitmap?>?>(null) }
+    LaunchedEffect(page, attempt) {
+        result = runCatching { loader.loadPage(page) }
     }
 
     Box(
@@ -620,9 +632,10 @@ private fun ReaderPage(page: Page, loader: ImageLoader) {
 
 @Composable
 private fun VerticalReaderPage(page: Page, loader: ImageLoader) {
-    var attempt by remember(page.key) { mutableIntStateOf(0) }
-    val result by produceState<Result<Bitmap?>?>(initialValue = null, page.key, attempt) {
-        value = runCatching { loader.loadPage(page) }
+    var attempt by remember(page) { mutableIntStateOf(0) }
+    var result by remember(page, attempt) { mutableStateOf<Result<Bitmap?>?>(null) }
+    LaunchedEffect(page, attempt) {
+        result = runCatching { loader.loadPage(page) }
     }
     val bitmap = result?.getOrNull()
 

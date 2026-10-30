@@ -22,7 +22,10 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.produceState
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -43,8 +46,9 @@ fun SeriesCover(
     cornerRadius: Int = 10,
 ) {
     val loader = LocalContainer.current.imageLoader
-    val bitmap by produceState<Bitmap?>(initialValue = null, series.sourceId, series.id) {
-        value = loader.loadCover(series)
+    var bitmap by remember(series.sourceId, series.id) { mutableStateOf<Bitmap?>(null) }
+    LaunchedEffect(series.sourceId, series.id) {
+        bitmap = loader.loadCover(series)
     }
     Box(
         modifier = modifier
@@ -60,12 +64,21 @@ fun SeriesCover(
                 modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(cornerRadius.dp)),
             )
         } else {
-            Icon(
-                imageVector = Icons.Outlined.AutoStories,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                modifier = Modifier.size(36.dp),
-            )
+            Column(
+                modifier = Modifier.fillMaxSize().padding(12.dp),
+                verticalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text("COMIC / 藏书", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    series.title,
+                    style = MaterialTheme.typography.titleMedium,
+                    fontFamily = androidx.compose.ui.text.font.FontFamily.Serif,
+                    maxLines = 3,
+                    overflow = androidx.compose.ui.text.style.TextOverflow.Ellipsis,
+                    color = MaterialTheme.colorScheme.onSurface,
+                )
+                Icon(Icons.Outlined.AutoStories, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(24.dp))
+            }
         }
     }
 }
@@ -77,23 +90,25 @@ fun SourceTypeBadge(type: SourceType, modifier: Modifier = Modifier) {
         SourceType.WEBDAV -> "WebDAV"
         SourceType.KOMGA -> "Komga"
         SourceType.KOOBONE -> "Koobone"
+        SourceType.ZLIBRARY -> "Z-Library"
     }
     val color = when (type) {
         SourceType.LOCAL -> MaterialTheme.colorScheme.primary
         SourceType.WEBDAV -> MaterialTheme.colorScheme.tertiary
         SourceType.KOMGA -> MaterialTheme.colorScheme.secondary
-        SourceType.KOOBONE -> MaterialTheme.colorScheme.error
+        SourceType.KOOBONE -> MaterialTheme.colorScheme.onSurfaceVariant
+        SourceType.ZLIBRARY -> MaterialTheme.colorScheme.tertiary
     }
     Surface(
         modifier = modifier,
-        color = color.copy(alpha = 0.16f),
+        color = color.copy(alpha = 0.12f),
         contentColor = color,
         shape = RoundedCornerShape(50),
     ) {
         Text(
             text = label,
             style = MaterialTheme.typography.labelSmall,
-            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 2.dp),
         )
     }
 }

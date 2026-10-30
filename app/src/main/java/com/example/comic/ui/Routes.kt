@@ -13,6 +13,7 @@ object Routes {
         "series?sourceId={sourceId}&seriesId={seriesId}&title={title}&libraryId={libraryId}&bookCount={bookCount}"
     const val READER_PATTERN =
         "reader?sourceId={sourceId}&bookId={bookId}&seriesId={seriesId}&title={title}&page={page}"
+    const val ZLIBRARY_PATTERN = "zlibrary/{sourceId}"
 
     fun series(series: Series): String =
         "series?sourceId=${Uri.encode(series.sourceId)}" +
@@ -27,4 +28,6 @@ object Routes {
             "&seriesId=${Uri.encode(book.seriesId)}" +
             "&title=${Uri.encode(book.title)}" +
             (page?.let { "&page=$it" } ?: "")
+
+    fun zlibrary(sourceId: String): String = "zlibrary/${Uri.encode(sourceId)}"
 }
